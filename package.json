@@ -1,0 +1,17 @@
+{
+  "name": "grove",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Sandboxed git-worktree harness for Claude Code",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "lint": "pnpm -r run lint",
+    "format": "prettier --write 'packages/cli/src/**/*.ts'"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "prettier": "^3.8.1"
+  }
+}

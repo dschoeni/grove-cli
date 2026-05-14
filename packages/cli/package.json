@@ -1,0 +1,23 @@
+{
+  "name": "@grove/cli",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Grove CLI — worktree + sandbox harness for Claude Code",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "grove": "./bin/grove"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "typescript": "^5.7.3"
+  }
+}
