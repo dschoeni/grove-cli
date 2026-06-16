@@ -4,6 +4,7 @@ import { runNew } from './commands/new.js';
 import { runResume } from './commands/resume.js';
 import { runLs } from './commands/ls.js';
 import { runRm } from './commands/rm.js';
+import { runPull } from './commands/pull.js';
 import { runCompletion } from './commands/completion.js';
 import { runCompleteSlugs } from './commands/complete-slugs.js';
 
@@ -19,6 +20,7 @@ Commands:
   resume <slug>        Re-enter an existing worktree and continue the last session.
   ls                   List Grove-managed worktrees.
   rm <slug>            Remove a worktree and its branch.
+  pull [branch]        Fast-forward the base branch to its latest remote state.
   completion <shell>   Output a bash or zsh completion script.
 
 Use "grove <command> --help" for per-command flags.
@@ -44,6 +46,9 @@ async function main(): Promise<number> {
       return 0;
     case 'rm':
       runRm(rest);
+      return 0;
+    case 'pull':
+      runPull(rest);
       return 0;
     case 'completion':
       return runCompletion(rest);
