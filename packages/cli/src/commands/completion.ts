@@ -5,7 +5,7 @@ _grove() {
   cmd="\${COMP_WORDS[1]:-}"
 
   if [[ \$COMP_CWORD -eq 1 ]]; then
-    COMPREPLY=( \$(compgen -W "init new resume ls rm completion" -- "\$cur") )
+    COMPREPLY=( \$(compgen -W "init new resume ls rm pull completion" -- "\$cur") )
     return
   fi
 
@@ -38,6 +38,7 @@ _grove() {
     'resume:Re-enter an existing worktree'
     'ls:List Grove-managed worktrees'
     'rm:Remove a worktree and its branch'
+    'pull:Fast-forward the base branch to its latest remote state'
     'completion:Output a shell completion script'
   )
 

@@ -24,13 +24,12 @@ export interface SandboxArgv {
 }
 
 /**
- * Build the argv to launch `program` inside a bwrap sandbox.
+ * Build the argv to launch `program` inside a sandbox.
  *
  * When sandbox is disabled, returns `{ command: program, args: programArgs }`
- * with cwd handled by the caller. Otherwise constructs a bwrap invocation
- * that mounts the worktree rw, the repo root ro (so shared symlinks resolve),
- * essential system + home dirs ro/rw, and execs `program` directly with no
- * intermediate shell.
+ * with cwd handled by the caller. Otherwise dispatches by platform: bwrap on
+ * Linux (a mount namespace exposing only what is bound), sandbox-exec on macOS
+ * (a Seatbelt write-confinement profile over the real filesystem).
  */
 export function buildSandbox(input: BuildSandboxInput): SandboxArgv {
   if (!input.sandbox.enabled) {
@@ -41,6 +40,19 @@ export function buildSandbox(input: BuildSandboxInput): SandboxArgv {
     };
   }
 
+  if (process.platform === 'darwin') return buildSeatbelt(input);
+  if (process.platform === 'linux') return buildBwrap(input);
+  throw new GroveError(
+    `Sandboxing is not supported on ${process.platform}. Pass --no-sandbox to run without it.`,
+  );
+}
+
+/**
+ * Linux: construct a bwrap invocation that mounts the worktree rw, the repo
+ * root ro (so shared symlinks resolve), essential system + home dirs ro/rw,
+ * and execs `program` directly with no intermediate shell.
+ */
+function buildBwrap(input: BuildSandboxInput): SandboxArgv {
   const bwrap = resolveBwrap();
   const resolved = resolveTools();
   const home = os.homedir();
@@ -108,6 +120,178 @@ export function buildSandbox(input: BuildSandboxInput): SandboxArgv {
     args,
     env: hostEnvForBwrap(),
   };
+}
+
+/**
+ * macOS: launch `program` under sandbox-exec with a Seatbelt profile that
+ * denies everything by default, then re-allows the operations a dev session
+ * needs (exec, network, mach lookups) plus *content* reads and writes within a
+ * confined set of paths. Reads are restricted to the worktree, the gitdirs,
+ * declared shares, Claude/tool state, and the system paths required to run
+ * binaries — so the agent cannot read files outside its workspace. Writes are
+ * the read-write subset of that (worktree, gitdirs, rw shares, Claude state,
+ * temp).
+ *
+ * `file-read-metadata` is allowed globally: the kernel needs to stat ancestor
+ * path components to resolve any path at all, so existence/size of arbitrary
+ * paths leaks, but file *contents* outside the allowed subpaths do not.
+ */
+function buildSeatbelt(input: BuildSandboxInput): SandboxArgv {
+  const sandboxExec = resolveSandboxExec();
+  const resolved = resolveTools();
+  const home = os.homedir();
+
+  // System paths required to load and run binaries (dyld cache, frameworks,
+  // shells, brew, resolver config, device nodes).
+  const readSubpaths: string[] = [];
+  for (const dir of [
+    '/usr',
+    '/System',
+    '/Library',
+    '/bin',
+    '/sbin',
+    '/opt',
+    '/dev',
+    '/private/etc',
+    '/private/var/db',
+    '/private/var/run',
+    '/private/var/folders',
+  ]) {
+    if (fs.existsSync(dir)) readSubpaths.push(dir);
+  }
+
+  // Tool installs that may live under $HOME (nvm node, ~/.local/share/claude).
+  for (const p of toolReadPaths(home, resolved)) {
+    if (fs.existsSync(p)) readSubpaths.push(canonical(p));
+  }
+
+  // Identity / auth, read-only.
+  for (const rel of ['.gitconfig', '.config/git', '.config/gh', '.config/glab-cli', '.ssh']) {
+    const p = path.join(home, rel);
+    if (fs.existsSync(p)) readSubpaths.push(canonical(p));
+  }
+  const sshAuthSock = process.env.SSH_AUTH_SOCK;
+  if (sshAuthSock && fs.existsSync(sshAuthSock)) readSubpaths.push(canonical(path.dirname(sshAuthSock)));
+
+  // Writable regions — also readable.
+  const writeSubpaths: string[] = [canonical(input.worktreePath)];
+  for (const dir of input.gitDirs ?? []) {
+    if (fs.existsSync(dir)) writeSubpaths.push(canonical(dir));
+  }
+  for (const share of input.sandbox.shareReadWrite) {
+    const abs = path.resolve(input.rootDir, share);
+    if (fs.existsSync(abs)) writeSubpaths.push(canonical(abs));
+  }
+  const claudeDir = path.join(home, '.claude');
+  if (fs.existsSync(claudeDir)) writeSubpaths.push(canonical(claudeDir));
+  for (const t of ['/private/tmp', '/private/var/folders', process.env.TMPDIR]) {
+    if (t && fs.existsSync(t)) writeSubpaths.push(canonical(t));
+  }
+  writeSubpaths.push('/dev');
+
+  // Read-only shares declared in .groverc (resolve symlink targets back in the repo).
+  for (const share of input.sandbox.shareReadOnly) {
+    const abs = path.resolve(input.rootDir, share);
+    if (fs.existsSync(abs)) readSubpaths.push(canonical(abs));
+  }
+
+  const writeLiterals: string[] = [];
+  const claudeJson = path.join(home, '.claude.json');
+  if (fs.existsSync(claudeJson)) writeLiterals.push(canonical(claudeJson));
+
+  const profile = buildSeatbeltProfile({
+    read: unique([...readSubpaths, ...writeSubpaths]),
+    write: unique(writeSubpaths),
+    writeLiterals: unique(writeLiterals),
+  });
+  const program = resolveProgram(input.program);
+
+  return {
+    command: sandboxExec,
+    args: ['-p', profile, program, ...input.programArgs],
+    env: buildSandboxEnv(home, resolved, 'darwin'),
+  };
+}
+
+/** Home-local tool install dirs that must be readable to run node/claude/pnpm. */
+function toolReadPaths(home: string, resolved: ResolvedTools): string[] {
+  const paths = [path.join(home, '.local/bin'), path.join(home, '.local/share/claude')];
+  if (resolved.node) paths.push(path.resolve(path.dirname(resolved.node), '..'));
+  paths.push(process.env.PNPM_HOME || path.join(home, '.local/share/pnpm'));
+  return paths;
+}
+
+interface SeatbeltPaths {
+  read: string[];
+  write: string[];
+  writeLiterals: string[];
+}
+
+function buildSeatbeltProfile(paths: SeatbeltPaths): string {
+  const lines = [
+    '(version 1)',
+    '(deny default)',
+    '(allow process-exec*)',
+    '(allow process-fork)',
+    '(allow signal (target self))',
+    '(allow sysctl-read)',
+    '(allow mach-lookup)',
+    '(allow ipc-posix-shm)',
+    '(allow iokit-open)',
+    '(allow system-socket)',
+    '(allow network*)',
+    // Metadata (stat) must be global so the kernel can resolve path components.
+    '(allow file-read-metadata)',
+    '(allow file-read*',
+  ];
+  for (const p of paths.read) lines.push(`  (subpath ${sbplString(p)})`);
+  lines.push(')');
+  lines.push('(allow file-write*');
+  for (const p of paths.write) lines.push(`  (subpath ${sbplString(p)})`);
+  for (const p of paths.writeLiterals) lines.push(`  (literal ${sbplString(p)})`);
+  lines.push(')');
+  return lines.join('\n') + '\n';
+}
+
+/** Quote a path as an SBPL string literal, escaping backslashes and quotes. */
+function sbplString(p: string): string {
+  return `"${p.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function resolveSandboxExec(): string {
+  const candidate = process.env.GROVE_SANDBOX_EXEC_PATH || '/usr/bin/sandbox-exec';
+  try {
+    fs.accessSync(candidate, fs.constants.X_OK);
+    return candidate;
+  } catch {
+    throw new GroveError(
+      `sandbox-exec not found (looked for "${candidate}"). Pass --no-sandbox to run without a sandbox.`,
+    );
+  }
+}
+
+/** Resolve a bare program name to an absolute path so sandbox-exec can exec it. */
+function resolveProgram(program: string): string {
+  if (program.includes('/')) return program;
+  try {
+    const p = execSync(`which ${program}`, { encoding: 'utf-8' }).trim();
+    return p || program;
+  } catch {
+    return program;
+  }
+}
+
+/** Canonicalize a path (resolve symlinks like /tmp → /private/tmp) for subpath matching. */
+function canonical(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
+function unique(items: string[]): string[] {
+  return Array.from(new Set(items));
 }
 
 function resolveBwrap(): string {
@@ -220,22 +404,32 @@ export function resolveWorktreeGitDir(worktreePath: string): string | null {
   }
 }
 
-function buildSandboxEnv(home: string, resolved: ResolvedTools): Record<string, string> {
+function buildSandboxEnv(
+  home: string,
+  resolved: ResolvedTools,
+  platform: NodeJS.Platform = process.platform,
+): Record<string, string> {
   const env: Record<string, string> = {
     HOME: home,
     USER: process.env.USER || 'user',
     TERM: process.env.TERM || 'xterm-256color',
     SHELL: '/bin/bash',
     LANG: process.env.LANG || 'en_US.UTF-8',
-    PATH: buildSandboxPath(home, resolved),
+    PATH: buildSandboxPath(home, resolved, platform),
   };
   if (process.env.ANTHROPIC_API_KEY) env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
   if (process.env.SSH_AUTH_SOCK) env.SSH_AUTH_SOCK = process.env.SSH_AUTH_SOCK;
   if (process.env.COLORTERM) env.COLORTERM = process.env.COLORTERM;
+  // sandbox-exec inherits this env directly; macOS tools rely on TMPDIR.
+  if (platform === 'darwin' && process.env.TMPDIR) env.TMPDIR = process.env.TMPDIR;
   return env;
 }
 
-function buildSandboxPath(home: string, resolved: ResolvedTools): string {
+function buildSandboxPath(
+  home: string,
+  resolved: ResolvedTools,
+  platform: NodeJS.Platform,
+): string {
   const dirs = new Set<string>([
     '/usr/local/sbin',
     '/usr/local/bin',
@@ -249,7 +443,11 @@ function buildSandboxPath(home: string, resolved: ResolvedTools): string {
   for (const v of Object.values(resolved)) {
     if (v) dirs.add(path.dirname(v));
   }
-  if (fs.existsSync('/home/linuxbrew/.linuxbrew/bin')) {
+  if (platform === 'darwin') {
+    for (const d of ['/opt/homebrew/bin', '/opt/homebrew/sbin']) {
+      if (fs.existsSync(d)) dirs.add(d);
+    }
+  } else if (fs.existsSync('/home/linuxbrew/.linuxbrew/bin')) {
     dirs.add('/home/linuxbrew/.linuxbrew/bin');
   }
   return Array.from(dirs).join(':');

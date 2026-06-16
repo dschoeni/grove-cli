@@ -29,6 +29,36 @@ export function gitTry(args: string[], opts: GitRunOptions): string | null {
   }
 }
 
+/** Run git with inherited stdio so the user sees progress (fetch, merge, …). */
+export function gitInteractive(args: string[], opts: GitRunOptions): void {
+  try {
+    execFileSync('git', args, { cwd: opts.cwd, stdio: 'inherit' });
+  } catch (err) {
+    throw new GroveError(`git ${args.join(' ')} failed: ${(err as Error).message}`);
+  }
+}
+
+/** Resolve a ref to its short hash, or null when it doesn't exist. */
+export function shortSha(repoRoot: string, ref: string): string | null {
+  const out = gitTry(['rev-parse', '--short', ref], { cwd: repoRoot });
+  return out ? out.trim() : null;
+}
+
+/**
+ * Pick the remote to pull `branch` from: its configured upstream remote when
+ * set, else `origin` when present, else the first remote, else null.
+ */
+export function remoteForBranch(repoRoot: string, branch: string): string | null {
+  const configured = gitTry(['config', '--get', `branch.${branch}.remote`], { cwd: repoRoot });
+  if (configured && configured.trim()) return configured.trim();
+  const remotes = (gitTry(['remote'], { cwd: repoRoot }) ?? '')
+    .split('\n')
+    .map((r) => r.trim())
+    .filter(Boolean);
+  if (remotes.includes('origin')) return 'origin';
+  return remotes[0] ?? null;
+}
+
 export function branchExists(repoRoot: string, branch: string): boolean {
   const out = gitTry(['rev-parse', '--verify', `refs/heads/${branch}`], { cwd: repoRoot });
   return out !== null;
