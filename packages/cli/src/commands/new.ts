@@ -129,7 +129,7 @@ async function runNewSingle(
   const worktreePath = addWorktree({ repoRoot: project.repoRoot, slug, baseBranch });
 
   try {
-    setupShared(project.repoRoot, worktreePath, project.config.sandbox);
+    setupShared(project.repoRoot, worktreePath, project.config.sandbox, sandboxConfig.enabled);
     if (project.config.postCreateCommands.length > 0) {
       runPostCreateCommands({ worktreePath, commands: project.config.postCreateCommands });
     }
@@ -202,7 +202,7 @@ async function runNewWorkspace(
   });
 
   try {
-    setupShared(workspaceRoot, worktreePath, config.sandbox);
+    setupShared(workspaceRoot, worktreePath, config.sandbox, sandboxConfig.enabled);
     if (config.postCreateCommands.length > 0) {
       runPostCreateCommands({ worktreePath, commands: config.postCreateCommands });
     }
@@ -246,7 +246,19 @@ function requireCwdAtWorkspaceRoot(workspaceRoot: string): void {
   }
 }
 
-function setupShared(rootDir: string, worktreePath: string, sandbox: SandboxConfig): void {
+function setupShared(
+  rootDir: string,
+  worktreePath: string,
+  sandbox: SandboxConfig,
+  sandboxEnabled: boolean,
+): void {
+  if (sandboxEnabled) {
+    // Sandboxed launches bind shared paths onto the worktree at exec time (see
+    // resolveSharedBinds), so no on-disk symlink is created — and none is
+    // wanted: a symlink here would make `realpath` escape the worktree, the
+    // very confusion the bind approach avoids.
+    return;
+  }
   const result = symlinkShared({
     repoRoot: rootDir,
     worktreePath,
