@@ -5,12 +5,12 @@ _grove() {
   cmd="\${COMP_WORDS[1]:-}"
 
   if [[ \$COMP_CWORD -eq 1 ]]; then
-    COMPREPLY=( \$(compgen -W "init new resume ls rm pull completion" -- "\$cur") )
+    COMPREPLY=( \$(compgen -W "init new resume sync ls rm pull completion" -- "\$cur") )
     return
   fi
 
   case "\$cmd" in
-    resume|rm)
+    resume|sync|rm)
       if [[ \$COMP_CWORD -eq 2 ]]; then
         local slugs
         slugs="\$(grove __complete-slugs 2>/dev/null)"
@@ -36,6 +36,7 @@ _grove() {
     'init:Write a starter .groverc at the repo root'
     'new:Create a worktree and launch a sandboxed Claude session'
     'resume:Re-enter an existing worktree'
+    'sync:Update worktree branches from their remote'
     'ls:List Grove-managed worktrees'
     'rm:Remove a worktree and its branch'
     'pull:Fast-forward the base branch to its latest remote state'
@@ -48,7 +49,7 @@ _grove() {
   fi
 
   case "\$words[2]" in
-    resume|rm)
+    resume|sync|rm)
       if (( CURRENT == 3 )); then
         local -a slugs
         slugs=("\${(@f)\$(grove __complete-slugs 2>/dev/null)}")

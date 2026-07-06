@@ -10,7 +10,9 @@ import {
   workspaceWorktreeDir,
   repoAbsPath,
   type ParsedSlug,
+  type WorktreeAddMode,
 } from '../lib/worktree.js';
+import { defaultRemote, fetchRemote } from '../lib/git.js';
 import { symlinkShared } from '../lib/shared.js';
 import { runPostCreateCommands } from '../lib/post-create.js';
 import { buildSandbox, resolveWorktreeGitDir } from '../lib/sandbox.js';
@@ -25,14 +27,20 @@ const HELP = `\
 grove new — create a worktree and launch a sandboxed Claude session
 
 Usage:
-  grove new <slug> [--from <branch>] [--no-sandbox] [--keep-on-failure] [--dry-run] [-- <claude-args>…]
+  grove new <slug> [--from <branch>] [--fetch] [--no-sandbox] [--keep-on-failure] [--dry-run] [-- <claude-args>…]
 
 Arguments:
   <slug>                 Branch name. Must start with feat/, fix/, or chore/.
 
+If a branch matching <slug> already exists it is reused: a local branch is checked
+out as-is, otherwise a local tracking branch is created from origin/<slug>. --from is
+only consulted when a brand-new branch has to be created.
+
 Flags:
   --from <branch>        Base branch to fork from. Defaults to .groverc baseBranch / current HEAD.
                          In workspace mode, overrides every repo's baseBranch.
+                         Ignored when an existing branch is reused/adopted.
+  --fetch                git fetch the default remote first, so base and origin/<slug> are current.
   --no-sandbox           Skip bwrap. Launches claude in the worktree directly.
   --keep-on-failure      On postCreateCommand failure, leave the worktree in place.
   --dry-run              Print the planned actions and exit before any side effects.
@@ -47,6 +55,7 @@ export async function runNew(argv: string[]): Promise<number> {
     options: {
       help: { type: 'boolean', short: 'h' },
       from: { type: 'string' },
+      fetch: { type: 'boolean' },
       'no-sandbox': { type: 'boolean' },
       'keep-on-failure': { type: 'boolean' },
       'dry-run': { type: 'boolean' },
@@ -81,6 +90,7 @@ export async function runNew(argv: string[]): Promise<number> {
       project,
       slug,
       fromOverride: values.from ?? null,
+      fetch: Boolean(values.fetch),
       sandboxConfig,
       passthrough,
       keepOnFailure: Boolean(values['keep-on-failure']),
@@ -91,6 +101,7 @@ export async function runNew(argv: string[]): Promise<number> {
     project,
     slug,
     fromOverride: values.from ?? null,
+    fetch: Boolean(values.fetch),
     sandboxConfig,
     passthrough,
     keepOnFailure: Boolean(values['keep-on-failure']),
@@ -102,6 +113,7 @@ interface RunNewInput<P extends ProjectContext> {
   project: P;
   slug: ParsedSlug;
   fromOverride: string | null;
+  fetch: boolean;
   sandboxConfig: SandboxConfig;
   passthrough: string[];
   keepOnFailure: boolean;
@@ -114,9 +126,6 @@ async function runNewSingle(
   const { project, slug, fromOverride, sandboxConfig, passthrough, keepOnFailure, dryRun } = input;
 
   const baseBranch = fromOverride ?? project.config.baseBranch;
-  if (!baseBranch) {
-    throw new GroveError('Could not determine base branch. Pass --from or set baseBranch in .groverc.');
-  }
 
   if (dryRun) {
     printDryRunSingle({ slug: slug.full, baseBranch, project, sandboxConfig, passthrough });
@@ -125,8 +134,18 @@ async function runNewSingle(
 
   ensureGroveIgnored(project.repoRoot);
 
-  process.stderr.write(`\x1b[36m[grove]\x1b[0m creating worktree ${slug.full} from ${baseBranch}\n`);
-  const worktreePath = addWorktree({ repoRoot: project.repoRoot, slug, baseBranch });
+  if (input.fetch) {
+    const remote = defaultRemote(project.repoRoot);
+    if (remote) {
+      process.stderr.write(`\x1b[36m[grove]\x1b[0m fetching ${remote}...\n`);
+      fetchRemote(project.repoRoot, remote);
+    }
+  }
+
+  process.stderr.write(`\x1b[36m[grove]\x1b[0m creating worktree ${slug.full}\n`);
+  const added = addWorktree({ repoRoot: project.repoRoot, slug, baseBranch });
+  const worktreePath = added.worktreePath;
+  reportAddMode(slug.full, added.mode, baseBranch, fromOverride);
 
   try {
     setupShared(project.repoRoot, worktreePath, project.config.sandbox, sandboxConfig.enabled);
@@ -136,7 +155,7 @@ async function runNewSingle(
   } catch (err) {
     if (!keepOnFailure) {
       process.stderr.write(`\x1b[31m[grove]\x1b[0m setup failed, rolling back...\n`);
-      rollbackWorktree(project.repoRoot, slug);
+      rollbackWorktree(project.repoRoot, slug, added.createdBranch);
     } else {
       process.stderr.write(
         `\x1b[33m[grove]\x1b[0m setup failed but --keep-on-failure set; worktree left at ${worktreePath}\n`,
@@ -186,20 +205,31 @@ async function runNewWorkspace(
     ensureGroveIgnored(repoAbsPath(workspaceRoot, repo));
   }
 
+  if (input.fetch) {
+    for (const repo of config.repos) {
+      const abs = repoAbsPath(workspaceRoot, repo);
+      const remote = defaultRemote(abs);
+      if (remote) {
+        process.stderr.write(`\x1b[36m[grove]\x1b[0m fetching ${remote} in ${repo.name}...\n`);
+        fetchRemote(abs, remote);
+      }
+    }
+  }
+
   process.stderr.write(
     `\x1b[36m[grove]\x1b[0m creating workspace worktree ${slug.full} across ${config.repos.length} repo(s)\n`,
   );
-  for (const repo of config.repos) {
-    const base = fromOverride ?? repo.baseBranch ?? '(default)';
-    process.stderr.write(`  • ${repo.name} (${repo.path}) from ${base}\n`);
-  }
 
-  const worktreePath = addWorkspaceWorktree({
+  const added = addWorkspaceWorktree({
     workspaceRoot,
     slug,
     repos: config.repos,
     baseBranchOverride: fromOverride,
   });
+  const worktreePath = added.workspaceDir;
+  for (const r of added.perRepo) {
+    reportAddMode(`${slug.full} · ${r.repo.name}`, r.mode, fromOverride ?? r.repo.baseBranch, fromOverride);
+  }
 
   try {
     setupShared(workspaceRoot, worktreePath, config.sandbox, sandboxConfig.enabled);
@@ -209,7 +239,7 @@ async function runNewWorkspace(
   } catch (err) {
     if (!keepOnFailure) {
       process.stderr.write(`\x1b[31m[grove]\x1b[0m setup failed, rolling back...\n`);
-      rollbackWorkspaceWorktree(workspaceRoot, slug, config.repos);
+      rollbackWorkspaceWorktree(workspaceRoot, slug, added.perRepo);
     } else {
       process.stderr.write(
         `\x1b[33m[grove]\x1b[0m setup failed but --keep-on-failure set; worktree left at ${worktreePath}\n`,
@@ -242,6 +272,27 @@ function requireCwdAtWorkspaceRoot(workspaceRoot: string): void {
   if (cwd !== path.resolve(workspaceRoot)) {
     throw new GroveError(
       `Run this command from the workspace root: ${workspaceRoot} (current: ${cwd})`,
+    );
+  }
+}
+
+function reportAddMode(
+  label: string,
+  mode: WorktreeAddMode,
+  base: string | null,
+  fromOverride: string | null,
+): void {
+  const c = (s: string) => `\x1b[36m[grove]\x1b[0m ${s}`;
+  if (mode === 'reuse') {
+    process.stderr.write(c(`reusing existing branch ${label}\n`));
+  } else if (mode === 'adopt') {
+    process.stderr.write(c(`adopting remote branch for ${label} (tracking origin)\n`));
+  } else {
+    process.stderr.write(c(`branched ${label}${base ? ` from ${base}` : ''}\n`));
+  }
+  if (mode !== 'create' && fromOverride) {
+    process.stderr.write(
+      `\x1b[33m[grove]\x1b[0m --from ${fromOverride} ignored; ${label} already exists\n`,
     );
   }
 }
@@ -297,7 +348,7 @@ function collectWorkspaceGitDirs(
 
 interface DryRunSingleInput {
   slug: string;
-  baseBranch: string;
+  baseBranch: string | null;
   project: Extract<ProjectContext, { kind: 'single' }>;
   sandboxConfig: SandboxConfig;
   passthrough: string[];
@@ -309,7 +360,7 @@ function printDryRunSingle(input: DryRunSingleInput): void {
     `Repo root:    ${input.project.repoRoot}`,
     `Config:       ${input.project.configSource}`,
     `Branch:       ${input.slug}`,
-    `From:         ${input.baseBranch}`,
+    `From:         ${input.baseBranch ?? '(existing branch if present, else current HEAD)'}`,
     `Worktree:     ${input.project.repoRoot}/.grove/${input.slug}`,
     `Sandbox:      ${input.sandboxConfig.enabled ? 'enabled' : 'disabled'}`,
     `Shared (ro):  ${input.sandboxConfig.shareReadOnly.join(', ') || '(none)'}`,

@@ -2,7 +2,17 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { BRANCH_TYPES, type BranchType, type WorkspaceRepo } from '../types.js';
 import { GroveError } from './project.js';
-import { branchExists, git, listWorktrees, type WorktreePorcelain } from './git.js';
+import {
+  branchExists,
+  branchCheckedOutAt,
+  defaultRemote,
+  git,
+  listWorktrees,
+  pruneWorktrees,
+  remoteBranchExists,
+  revExists,
+  type WorktreePorcelain,
+} from './git.js';
 
 const SLUG_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._\-/]*$/;
 const SLUG_FORBIDDEN_RE = /(^|\/)\.\.($|\/)|[~^:?*\\[]/;
@@ -54,37 +64,115 @@ export function listGroveWorktrees(repoRoot: string): WorktreePorcelain[] {
   return listWorktrees(repoRoot).filter((w) => isGroveWorktree(repoRoot, w.path));
 }
 
+/** How `grove new` obtained the branch for a worktree. */
+export type WorktreeAddMode = 'reuse' | 'adopt' | 'create';
+
+interface BranchPlan {
+  /** git args after `worktree add`. */
+  args: string[];
+  /** True when grove created the branch (so rollback may safely delete it). */
+  createdBranch: boolean;
+  mode: WorktreeAddMode;
+}
+
+/**
+ * Decide how to check the slug's branch into `worktreePath`, without mutating:
+ *  - reuse  — a local branch already exists → check it out (base ignored).
+ *  - adopt  — only `<remote>/<slug>` exists → create a local tracking branch.
+ *  - create — neither exists → branch off `baseBranch`.
+ * Throws a friendly error if the branch is already checked out elsewhere or if
+ * a fresh branch is needed but the base is missing/unresolvable.
+ */
+function planBranch(
+  repoCwd: string,
+  slug: ParsedSlug,
+  worktreePath: string,
+  baseBranch: string | null,
+): BranchPlan {
+  const branch = slug.full;
+
+  const checkedOut = branchCheckedOutAt(repoCwd, branch);
+  if (checkedOut) {
+    throw new GroveError(
+      `Branch "${branch}" is already checked out at ${checkedOut}. ` +
+        `Use \`grove resume ${branch}\` to re-enter it, or \`grove rm ${branch}\` first.`,
+    );
+  }
+
+  if (branchExists(repoCwd, branch)) {
+    return { args: [worktreePath, branch], createdBranch: false, mode: 'reuse' };
+  }
+
+  const remote = defaultRemote(repoCwd);
+  if (remote && remoteBranchExists(repoCwd, remote, branch)) {
+    return {
+      args: ['-b', branch, worktreePath, `${remote}/${branch}`],
+      createdBranch: true,
+      mode: 'adopt',
+    };
+  }
+
+  if (!baseBranch) {
+    throw new GroveError(
+      `No base branch to create "${branch}" from. Pass --from or set baseBranch in .groverc.`,
+    );
+  }
+  if (!revExists(repoCwd, baseBranch)) {
+    throw new GroveError(
+      `Base branch "${baseBranch}" does not resolve. ` +
+        `Fetch it first (\`grove new ${branch} --fetch\`) or pass an existing --from <branch>.`,
+    );
+  }
+  return { args: ['-b', branch, worktreePath, baseBranch], createdBranch: true, mode: 'create' };
+}
+
 export interface AddWorktreeInput {
   repoRoot: string;
   slug: ParsedSlug;
   baseBranch: string | null;
 }
 
-export function addWorktree(input: AddWorktreeInput): string {
-  const { repoRoot, slug, baseBranch } = input;
-  if (branchExists(repoRoot, slug.full)) {
-    throw new GroveError(`Branch "${slug.full}" already exists`);
-  }
-  const worktreePath = worktreePathFor(repoRoot, slug);
-  if (fs.existsSync(worktreePath)) {
-    throw new GroveError(`Worktree path already exists: ${worktreePath}`);
-  }
-  fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
+export interface AddWorktreeResult {
+  worktreePath: string;
+  createdBranch: boolean;
+  mode: WorktreeAddMode;
+}
 
-  const args = ['worktree', 'add', '-b', slug.full, worktreePath];
-  if (baseBranch) args.push(baseBranch);
-  git(args, { cwd: repoRoot });
-  return worktreePath;
+export function addWorktree(input: AddWorktreeInput): AddWorktreeResult {
+  const { repoRoot, slug, baseBranch } = input;
+  pruneWorktrees(repoRoot);
+
+  const worktreePath = worktreePathFor(repoRoot, slug);
+  const existing = findGroveWorktree(repoRoot, slug);
+  if (existing) {
+    throw new GroveError(
+      `A worktree for "${slug.full}" already exists at ${existing.path}. ` +
+        `Use \`grove resume ${slug.full}\` to re-enter it, or \`grove rm ${slug.full}\` to remove it.`,
+    );
+  }
+  if (fs.existsSync(worktreePath)) {
+    throw new GroveError(
+      `Worktree path already exists: ${worktreePath}. ` +
+        `It is not a registered worktree — remove the leftover directory and retry.`,
+    );
+  }
+
+  const plan = planBranch(repoRoot, slug, worktreePath, baseBranch);
+  fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
+  git(['worktree', 'add', ...plan.args], { cwd: repoRoot });
+  return { worktreePath, createdBranch: plan.createdBranch, mode: plan.mode };
 }
 
 export interface RemoveWorktreeInput {
   repoRoot: string;
   slug: ParsedSlug;
   force: boolean;
+  /** When false, leave the branch in place (used to protect reused branches). */
+  deleteBranch?: boolean;
 }
 
 export function removeWorktree(input: RemoveWorktreeInput): void {
-  const { repoRoot, slug, force } = input;
+  const { repoRoot, slug, force, deleteBranch = true } = input;
   const worktreePath = worktreePathFor(repoRoot, slug);
   const args = ['worktree', 'remove'];
   if (force) args.push('--force');
@@ -92,7 +180,7 @@ export function removeWorktree(input: RemoveWorktreeInput): void {
   git(args, { cwd: repoRoot });
 
   // Best-effort branch delete. -D so it works even if not merged.
-  if (branchExists(repoRoot, slug.full)) {
+  if (deleteBranch && branchExists(repoRoot, slug.full)) {
     git(['branch', '-D', slug.full], { cwd: repoRoot });
   }
 
@@ -107,9 +195,9 @@ export function removeWorktree(input: RemoveWorktreeInput): void {
   }
 }
 
-export function rollbackWorktree(repoRoot: string, slug: ParsedSlug): void {
+export function rollbackWorktree(repoRoot: string, slug: ParsedSlug, createdBranch: boolean): void {
   try {
-    removeWorktree({ repoRoot, slug, force: true });
+    removeWorktree({ repoRoot, slug, force: true, deleteBranch: createdBranch });
   } catch {
     // Already gone or never created; nothing to do.
   }
@@ -143,54 +231,70 @@ export interface AddWorkspaceWorktreeInput {
   baseBranchOverride: string | null;
 }
 
+/** Per-repo outcome of a workspace worktree add. */
+export interface WorkspaceRepoAddResult {
+  repo: WorkspaceRepo;
+  /** True when grove created the branch (so rollback may safely delete it). */
+  createdBranch: boolean;
+  mode: WorktreeAddMode;
+}
+
+export interface AddWorkspaceWorktreeResult {
+  workspaceDir: string;
+  perRepo: WorkspaceRepoAddResult[];
+}
+
 /**
  * Create one git worktree per repo under `<workspaceRoot>/.grove/<slug>/<repo.path>`.
- * Rolls back any partial state if any sub-repo fails.
+ * Each repo independently reuses / adopts / creates its branch, so a branch that
+ * only exists in some repos is fine. Rolls back any partial state if a repo fails,
+ * deleting only branches grove created.
  */
-export function addWorkspaceWorktree(input: AddWorkspaceWorktreeInput): string {
+export function addWorkspaceWorktree(input: AddWorkspaceWorktreeInput): AddWorkspaceWorktreeResult {
   const { workspaceRoot, slug, repos, baseBranchOverride } = input;
   const workspaceDir = workspaceWorktreeDir(workspaceRoot, slug);
 
   if (fs.existsSync(workspaceDir)) {
-    throw new GroveError(`Workspace worktree path already exists: ${workspaceDir}`);
-  }
-  for (const repo of repos) {
-    const abs = repoAbsPath(workspaceRoot, repo);
-    if (branchExists(abs, slug.full)) {
-      throw new GroveError(`Branch "${slug.full}" already exists in repo "${repo.name}" (${repo.path})`);
-    }
+    throw new GroveError(
+      `A worktree for "${slug.full}" already exists at ${workspaceDir}. ` +
+        `Use \`grove resume ${slug.full}\` to re-enter it, or \`grove rm ${slug.full}\` to remove it.`,
+    );
   }
 
-  const created: WorkspaceRepo[] = [];
+  const created: WorkspaceRepoAddResult[] = [];
   try {
     for (const repo of repos) {
-      const base = baseBranchOverride ?? repo.baseBranch;
-      if (!base) {
-        throw new GroveError(
-          `No base branch for repo "${repo.name}". Set repos[].baseBranch in .groverc or pass --from.`,
-        );
-      }
+      const abs = repoAbsPath(workspaceRoot, repo);
+      pruneWorktrees(abs);
       const target = repoWorktreePath(workspaceRoot, slug, repo);
+      const base = baseBranchOverride ?? repo.baseBranch;
+      let plan: BranchPlan;
+      try {
+        plan = planBranch(abs, slug, target, base);
+      } catch (e) {
+        if (e instanceof GroveError) {
+          throw new GroveError(`repo "${repo.name}" (${repo.path}): ${e.message}`);
+        }
+        throw e;
+      }
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      git(['worktree', 'add', '-b', slug.full, target, base], {
-        cwd: repoAbsPath(workspaceRoot, repo),
-      });
-      created.push(repo);
+      git(['worktree', 'add', ...plan.args], { cwd: abs });
+      created.push({ repo, createdBranch: plan.createdBranch, mode: plan.mode });
     }
   } catch (err) {
     rollbackWorkspaceWorktree(workspaceRoot, slug, created);
     throw err;
   }
 
-  return workspaceDir;
+  return { workspaceDir, perRepo: created };
 }
 
 export function rollbackWorkspaceWorktree(
   workspaceRoot: string,
   slug: ParsedSlug,
-  repos: WorkspaceRepo[],
+  results: WorkspaceRepoAddResult[],
 ): void {
-  for (const repo of repos) {
+  for (const { repo, createdBranch } of results) {
     const target = repoWorktreePath(workspaceRoot, slug, repo);
     try {
       git(['worktree', 'remove', '--force', target], { cwd: repoAbsPath(workspaceRoot, repo) });
@@ -198,7 +302,7 @@ export function rollbackWorkspaceWorktree(
       // best effort
     }
     try {
-      if (branchExists(repoAbsPath(workspaceRoot, repo), slug.full)) {
+      if (createdBranch && branchExists(repoAbsPath(workspaceRoot, repo), slug.full)) {
         git(['branch', '-D', slug.full], { cwd: repoAbsPath(workspaceRoot, repo) });
       }
     } catch {

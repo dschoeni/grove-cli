@@ -2,6 +2,7 @@ import { GroveError } from './lib/project.js';
 import { runInit } from './commands/init.js';
 import { runNew } from './commands/new.js';
 import { runResume } from './commands/resume.js';
+import { runSync } from './commands/sync.js';
 import { runLs } from './commands/ls.js';
 import { runRm } from './commands/rm.js';
 import { runPull } from './commands/pull.js';
@@ -18,6 +19,7 @@ Commands:
   init                 Write a starter .groverc at the repo root.
   new <slug>           Create a worktree and launch Claude inside a sandbox.
   resume <slug>        Re-enter an existing worktree and continue the last session.
+  sync <slug>          Update a worktree's branch(es) from their remote.
   ls                   List Grove-managed worktrees.
   rm <slug>            Remove a worktree and its branch.
   pull [branch]        Fast-forward the base branch to its latest remote state.
@@ -41,6 +43,8 @@ async function main(): Promise<number> {
       return await runNew(rest);
     case 'resume':
       return await runResume(rest);
+    case 'sync':
+      return runSync(rest);
     case 'ls':
       runLs(rest);
       return 0;
