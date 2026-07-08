@@ -32,6 +32,7 @@ grove completion zsh > "${fpath[1]}/_grove"
 grove init                       # write a starter .groverc
 grove new <slug> [flags] [-- …]  # create worktree + launch Claude
 grove resume <slug> [flags]      # re-enter and `claude --continue`
+grove sync <slug> [flags]        # update the worktree branch(es) from their remote
 grove ls                         # list Grove-managed worktrees
 grove rm <slug> [--force]        # remove worktree + branch
 grove completion <bash|zsh>      # print a completion script
@@ -39,7 +40,21 @@ grove completion <bash|zsh>      # print a completion script
 
 `<slug>` must start with one of `feat/`, `fix/`, `chore/`. Anything after `--` is passed straight through to `claude`.
 
-`grove new` flags: `--from <branch>` overrides the base branch, `--no-sandbox` skips `bwrap`, `--keep-on-failure` leaves a half-set-up worktree in place if `postCreateCommands` exit non-zero, `--dry-run` prints the plan and exits.
+`grove new` flags: `--from <branch>` overrides the base branch, `--fetch` fetches the default remote first (so the base and `origin/<slug>` are current), `--no-sandbox` skips `bwrap`, `--keep-on-failure` leaves a half-set-up worktree in place if `postCreateCommands` exit non-zero, `--dry-run` prints the plan and exits.
+
+**Branch reuse.** If a branch matching `<slug>` already exists, `grove new` reuses it instead of erroring: a local branch is checked out as-is, otherwise a local branch tracking `origin/<slug>` is created. Only when neither exists is a fresh branch cut from the base (so `--from` is ignored on reuse/adopt). A branch that's already checked out in another worktree is refused with a pointer to `grove resume`.
+
+## Keeping a worktree in sync
+
+`grove sync <slug>` fetches and reconciles the worktree's branch with its remote. It fast-forwards when the remote is strictly ahead, and leaves diverged branches untouched — telling you to pass `--hard`, which `reset --hard`s the branch onto its upstream. That's the fix after someone force-pushes a shared branch. In a workspace it syncs every repo of the worktree independently and prints a per-repo summary.
+
+```bash
+grove sync feat/auth-flow            # fast-forward if possible
+grove sync feat/auth-flow --hard     # reset to origin after a force-push
+grove sync feat/auth-flow --dry-run  # report what each branch would do
+```
+
+Flags: `--hard` resets (discarding local divergence), `--remote <name>` overrides the remote (defaults to the branch's upstream remote, else `origin`), `--dry-run` reports without mutating.
 
 ## `.groverc`
 

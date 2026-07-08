@@ -64,6 +64,85 @@ export function branchExists(repoRoot: string, branch: string): boolean {
   return out !== null;
 }
 
+export function remoteBranchExists(cwd: string, remote: string, branch: string): boolean {
+  const out = gitTry(['rev-parse', '--verify', `refs/remotes/${remote}/${branch}`], { cwd });
+  return out !== null;
+}
+
+/** Return true if `ref` resolves to a commit (branch, tag, remote ref, or SHA). */
+export function revExists(cwd: string, ref: string): boolean {
+  return gitTry(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd }) !== null;
+}
+
+/**
+ * Preferred remote for a repo: `origin` when present, otherwise the sole remote,
+ * otherwise the first listed. Returns null when the repo has no remotes.
+ */
+export function defaultRemote(cwd: string): string | null {
+  const out = gitTry(['remote'], { cwd });
+  if (out === null) return null;
+  const remotes = out.split('\n').map((l) => l.trim()).filter(Boolean);
+  if (remotes.length === 0) return null;
+  if (remotes.includes('origin')) return 'origin';
+  return remotes[0]!;
+}
+
+/** Configured remote for a branch (branch.<name>.remote), or null. */
+export function branchRemote(cwd: string, branch: string): string | null {
+  const out = gitTry(['config', '--get', `branch.${branch}.remote`], { cwd });
+  return out === null ? null : out.trim() || null;
+}
+
+/** Fully-qualified upstream (e.g. "origin/main") for a branch, or null when unset. */
+export function upstreamOf(cwd: string, branch: string): string | null {
+  const out = gitTry(
+    ['rev-parse', '--abbrev-ref', '--symbolic-full-name', `${branch}@{upstream}`],
+    { cwd },
+  );
+  return out === null ? null : out.trim() || null;
+}
+
+/** Count commits `branch` is ahead of / behind `target`. */
+export function aheadBehind(
+  cwd: string,
+  branch: string,
+  target: string,
+): { ahead: number; behind: number } {
+  const out = gitTry(['rev-list', '--left-right', '--count', `${branch}...${target}`], { cwd });
+  if (out === null) return { ahead: 0, behind: 0 };
+  const [ahead, behind] = out.trim().split(/\s+/).map((n) => Number.parseInt(n, 10));
+  return { ahead: ahead || 0, behind: behind || 0 };
+}
+
+/** True when the working tree at `cwd` has staged or unstaged changes. */
+export function workingTreeDirty(cwd: string): boolean {
+  const out = gitTry(['status', '--porcelain'], { cwd });
+  return out !== null && out.trim().length > 0;
+}
+
+/** Path of the worktree that currently has `branch` checked out, or null. */
+export function branchCheckedOutAt(repoRoot: string, branch: string): string | null {
+  for (const w of listWorktrees(repoRoot)) {
+    if (w.branch === branch) return w.path;
+  }
+  return null;
+}
+
+/** Best-effort fetch of a single branch. Returns false on failure. */
+export function fetchBranch(cwd: string, remote: string, branch: string): boolean {
+  return gitTry(['fetch', remote, branch], { cwd }) !== null;
+}
+
+/** Best-effort fetch of a whole remote. Returns false on failure. */
+export function fetchRemote(cwd: string, remote: string): boolean {
+  return gitTry(['fetch', remote], { cwd }) !== null;
+}
+
+/** Clear stale worktree registrations (dirs deleted out from under git). */
+export function pruneWorktrees(cwd: string): void {
+  gitTry(['worktree', 'prune'], { cwd });
+}
+
 export interface WorktreePorcelain {
   path: string;
   head: string;

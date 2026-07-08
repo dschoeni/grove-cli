@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { execFileSync, execSync } from 'node:child_process';
 import type { SandboxConfig } from '../types.js';
 import { GroveError } from './project.js';
+import { resolveSharedBinds } from './shared.js';
 
 export interface BuildSandboxInput {
   /** Bound read-only so shared symlinks pointing back into the project resolve. */
@@ -97,14 +98,16 @@ function buildBwrap(input: BuildSandboxInput): SandboxArgv {
     if (fs.existsSync(dir)) args.push('--bind', dir, dir);
   }
 
-  // Optional extra shares from .groverc
-  for (const share of input.sandbox.shareReadOnly) {
-    const abs = path.resolve(input.rootDir, share);
-    if (fs.existsSync(abs)) args.push('--ro-bind', abs, abs);
-  }
-  for (const share of input.sandbox.shareReadWrite) {
-    const abs = path.resolve(input.rootDir, share);
-    if (fs.existsSync(abs)) args.push('--bind', abs, abs);
+  // Optional extra shares from .groverc. Bound at their WORKTREE path (not the
+  // repo-root path) so `realpath` on a shared entry stays inside the worktree
+  // instead of escaping into the main tree — see resolveSharedBinds.
+  for (const spec of resolveSharedBinds({
+    repoRoot: input.rootDir,
+    worktreePath: input.worktreePath,
+    shareReadOnly: input.sandbox.shareReadOnly,
+    shareReadWrite: input.sandbox.shareReadWrite,
+  })) {
+    args.push(spec.writable ? '--bind' : '--ro-bind', spec.source, spec.dest);
   }
 
   args.push('--chdir', input.worktreePath);

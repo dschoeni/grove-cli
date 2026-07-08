@@ -20,6 +20,7 @@ packages/cli/
 │   │   ├── init.ts               # write a starter .groverc
 │   │   ├── new.ts                # create worktree + launch Claude
 │   │   ├── resume.ts             # re-enter and `claude --continue`
+│   │   ├── sync.ts               # fetch + fast-forward / --hard reset the worktree branch(es)
 │   │   ├── ls.ts                 # list Grove-managed worktrees
 │   │   ├── rm.ts                 # remove worktree + branch
 │   │   ├── completion.ts         # bash/zsh completion script
@@ -58,14 +59,17 @@ ln -s "$PWD/packages/cli/bin/grove" ~/.local/bin/grove
 | Command | What it does |
 |---------|--------------|
 | `grove init` | Write a starter `.groverc` at the repo root and add `/.grove/` to `.git/info/exclude`. |
-| `grove new <slug>` | Create `.grove/<type>/<name>`, run post-create commands, launch Claude in a bwrap sandbox. `<slug>` must start with `feat/`, `fix/`, or `chore/`. |
+| `grove new <slug>` | Create `.grove/<type>/<name>`, run post-create commands, launch Claude in a bwrap sandbox. `<slug>` must start with `feat/`, `fix/`, or `chore/`. Reuses an existing local branch, or adopts `origin/<slug>` as a tracking branch, before cutting a fresh one from the base. |
 | `grove resume <slug>` | Re-enter an existing worktree and run `claude --continue`. |
+| `grove sync <slug> [--hard]` | Fetch and reconcile the worktree branch(es) with their remote: fast-forward when possible, `--hard` to reset after a force-push. Workspace mode syncs every repo. |
 | `grove ls` | List Grove-managed worktrees in the current project. |
 | `grove rm <slug> [--force]` | Remove the worktree and delete the branch. |
 | `grove pull [branch] [--remote <name>]` | Fast-forward the base branch (`.groverc` `baseBranch`, or per-repo in workspace mode) to its latest remote state. Fast-forward only; updates in place when checked out, else advances the ref directly. |
 | `grove completion <bash\|zsh>` | Print a completion script. |
 
-Flags: `grove new` accepts `--from <branch>`, `--no-sandbox`, `--keep-on-failure`, `--dry-run`, and `-- <args>` to forward to `claude`. Run `grove <cmd> --help` for the per-command flags.
+Flags: `grove new` accepts `--from <branch>`, `--fetch`, `--no-sandbox`, `--keep-on-failure`, `--dry-run`, and `-- <args>` to forward to `claude`. `grove sync` accepts `--hard`, `--remote <name>`, `--dry-run`. Run `grove <cmd> --help` for the per-command flags.
+
+Branch resolution lives in `planBranch` (`lib/worktree.ts`) and is shared by single-repo and workspace `new`. It tracks whether grove *created* the branch so rollback only deletes branches grove made — never a pre-existing branch it merely reused.
 
 ## `.groverc`
 
