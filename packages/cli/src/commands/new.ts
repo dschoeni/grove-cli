@@ -13,7 +13,7 @@ import {
   type WorktreeAddMode,
 } from '../lib/worktree.js';
 import { defaultRemote, fetchRemote } from '../lib/git.js';
-import { symlinkShared } from '../lib/shared.js';
+import { ensureSharedLinks } from '../lib/shared.js';
 import { runPostCreateCommands } from '../lib/post-create.js';
 import { buildSandbox, resolveWorktreeGitDir } from '../lib/sandbox.js';
 import { buildClaudeArgv } from '../lib/claude.js';
@@ -148,7 +148,7 @@ async function runNewSingle(
   reportAddMode(slug.full, added.mode, baseBranch, fromOverride);
 
   try {
-    setupShared(project.repoRoot, worktreePath, project.config.sandbox, sandboxConfig.enabled);
+    setupShared(project.repoRoot, worktreePath, project.config.sandbox);
     if (project.config.postCreateCommands.length > 0) {
       runPostCreateCommands({ worktreePath, commands: project.config.postCreateCommands });
     }
@@ -232,7 +232,7 @@ async function runNewWorkspace(
   }
 
   try {
-    setupShared(workspaceRoot, worktreePath, config.sandbox, sandboxConfig.enabled);
+    setupShared(workspaceRoot, worktreePath, config.sandbox);
     if (config.postCreateCommands.length > 0) {
       runPostCreateCommands({ worktreePath, commands: config.postCreateCommands });
     }
@@ -297,27 +297,18 @@ function reportAddMode(
   }
 }
 
-function setupShared(
-  rootDir: string,
-  worktreePath: string,
-  sandbox: SandboxConfig,
-  sandboxEnabled: boolean,
-): void {
-  if (sandboxEnabled) {
-    // Sandboxed launches bind shared paths onto the worktree at exec time (see
-    // resolveSharedBinds), so no on-disk symlink is created — and none is
-    // wanted: a symlink here would make `realpath` escape the worktree, the
-    // very confusion the bind approach avoids.
-    return;
-  }
-  const result = symlinkShared({
-    repoRoot: rootDir,
+function setupShared(rootDir: string, worktreePath: string, sandbox: SandboxConfig): void {
+  const result = ensureSharedLinks({
+    rootDir,
     worktreePath,
     shareReadOnly: sandbox.shareReadOnly,
     shareReadWrite: sandbox.shareReadWrite,
   });
-  for (const entry of result.created) {
-    process.stderr.write(`\x1b[36m[grove]\x1b[0m symlinked ${entry}\n`);
+  for (const entry of result.linked) {
+    process.stderr.write(`\x1b[36m[grove]\x1b[0m linked ${entry}\n`);
+  }
+  for (const entry of result.repaired) {
+    process.stderr.write(`\x1b[36m[grove]\x1b[0m repaired ${entry} (removed stale empty mountpoint)\n`);
   }
   for (const s of result.skipped) {
     process.stderr.write(`\x1b[33m[grove]\x1b[0m skipped ${s.entry} (${s.reason})\n`);

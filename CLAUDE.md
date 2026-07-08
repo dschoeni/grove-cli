@@ -34,7 +34,7 @@ packages/cli/
 │       ├── post-create.ts        # run .groverc postCreateCommands
 │       ├── project.ts            # locate repo, parse .groverc, ensure .grove ignored
 │       ├── sandbox.ts            # build bwrap argv (mounts, env, tools)
-│       ├── shared.ts             # symlink shareReadOnly/shareReadWrite into worktree
+│       ├── shared.ts             # shared-entry symlink chains + bwrap tmpfs overlay
 │       ├── status-line.ts        # ANSI status-line text (single + workspace)
 │       └── worktree.ts           # add/remove/list worktrees (single + workspace)
 ├── package.json
@@ -112,6 +112,10 @@ For multi-repo workspaces, set `type: "workspace"` and list `repos`. Every `grov
 
 `grove new` and `grove rm` in workspace mode must be run from the workspace root.
 
+## Shared entries
+
+Each `shareReadOnly`/`shareReadWrite` entry is wired on disk as a two-hop symlink chain — `<worktree>/<entry>` → `.grove/shared/<entry>` → `<root>/<entry>` — created by `ensureSharedLinks` (`lib/shared.ts`) on both `new` (before post-create commands run, so `npm install` etc. see the shares) and `resume`. Outside the sandbox the chain resolves to the real content, so host-side `npm run dev` in a worktree just works. Inside bwrap, a tmpfs is mounted over `<worktree>/.grove/shared` and each source is bound at its chain path (`resolveSharedOverlay`), which keeps `realpath` of a shared entry inside the worktree *and* keeps bwrap's auto-created mountpoints in the tmpfs instead of leaking empty files onto the host. A real (non-empty) file or dir already at the worktree path wins — the entry is skipped so the branch's own copy is never clobbered; a zero-byte file or empty dir at a declared share path is treated as leftover mountpoint junk and replaced with the link (this also self-heals worktrees damaged by the earlier bind-at-dest scheme). The `.grove/shared` dir inside the worktree is covered by the existing `/.grove/` entry in `.git/info/exclude`.
+
 ## Sandbox
 
 When `sandbox.enabled` is true, `grove new` / `grove resume` re-exec Claude inside a sandbox chosen by platform: `bwrap` on Linux, `sandbox-exec` (Apple Seatbelt) on macOS. `buildSandbox` in `lib/sandbox.ts` dispatches on `process.platform`; any other platform errors out (use `--no-sandbox`). Both paths confine the agent's reads and writes to its worktree.
@@ -119,7 +123,8 @@ When `sandbox.enabled` is true, `grove new` / `grove resume` re-exec Claude insi
 ### Linux (`bwrap`)
 
 - Read-only binds: `/usr`, `/bin`, `/lib`, `/sbin`, `/etc`, `/lib64`, `/run`, `/mnt/wsl`, `/home/linuxbrew` (when present), the repo root, and from `$HOME`: `.gitconfig`, `.config/git`, `.config/glab-cli`, `.config/gh`, `.ssh`, `.local/bin`, `.local/share/claude`, the resolved `node` install prefix (when under `$HOME`), and `$PNPM_HOME`.
-- Read-write binds: the worktree directory itself, every relevant `.git` dir, plus anything in `sandbox.shareReadWrite`. From `$HOME`: `.claude` and `.claude.json` so credentials and session state persist.
+- Read-write binds: the worktree directory itself and every relevant `.git` dir. From `$HOME`: `.claude` and `.claude.json` so credentials and session state persist.
+- Shared entries: a tmpfs over `<worktree>/.grove/shared`, with each `shareReadOnly` source ro-bound and each `shareReadWrite` source rw-bound at its chain path inside it (see "Shared entries" above).
 - Namespace isolation: `--unshare-user --unshare-pid --unshare-uts --unshare-cgroup --die-with-parent`. Network is **not** unshared so Claude can reach the API.
 - `--clearenv`, then a curated env with `HOME`, `USER`, `TERM`, `SHELL=/bin/bash`, `LANG`, a constructed `PATH`, `ANTHROPIC_API_KEY` (when set), `SSH_AUTH_SOCK`, `COLORTERM`.
 - Override `bwrap` location with `GROVE_BWRAP_PATH`.
