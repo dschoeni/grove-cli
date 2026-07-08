@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { execFileSync, execSync } from 'node:child_process';
 import type { SandboxConfig } from '../types.js';
 import { GroveError } from './project.js';
-import { resolveSharedBinds } from './shared.js';
+import { resolveSharedOverlay } from './shared.js';
 
 export interface BuildSandboxInput {
   /** Bound read-only so shared symlinks pointing back into the project resolve. */
@@ -98,16 +98,22 @@ function buildBwrap(input: BuildSandboxInput): SandboxArgv {
     if (fs.existsSync(dir)) args.push('--bind', dir, dir);
   }
 
-  // Optional extra shares from .groverc. Bound at their WORKTREE path (not the
-  // repo-root path) so `realpath` on a shared entry stays inside the worktree
-  // instead of escaping into the main tree — see resolveSharedBinds.
-  for (const spec of resolveSharedBinds({
-    repoRoot: input.rootDir,
+  // Optional extra shares from .groverc. On disk each share is a symlink chain
+  // <worktree>/<entry> → .grove/shared/<entry> → <root>/<entry>; here a tmpfs
+  // overlays .grove/shared and each source is bound at its chain path, so
+  // `realpath` on a shared entry stays inside the worktree AND the mountpoints
+  // bwrap creates land in the tmpfs instead of persisting on the host fs.
+  const overlay = resolveSharedOverlay({
+    rootDir: input.rootDir,
     worktreePath: input.worktreePath,
     shareReadOnly: input.sandbox.shareReadOnly,
     shareReadWrite: input.sandbox.shareReadWrite,
-  })) {
-    args.push(spec.writable ? '--bind' : '--ro-bind', spec.source, spec.dest);
+  });
+  if (overlay) {
+    args.push('--tmpfs', overlay.tmpfsDir);
+    for (const spec of overlay.binds) {
+      args.push(spec.writable ? '--bind' : '--ro-bind', spec.source, spec.dest);
+    }
   }
 
   args.push('--chdir', input.worktreePath);

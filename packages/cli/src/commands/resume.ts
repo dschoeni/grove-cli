@@ -14,6 +14,7 @@ import { ensureStatusLine } from '../lib/claude-settings.js';
 import { workspaceStatusLineText, singleStatusLineText } from '../lib/status-line.js';
 import { execInteractive } from '../lib/exec.js';
 import { splitPassthrough } from '../lib/argv.js';
+import { ensureSharedLinks } from '../lib/shared.js';
 
 const HELP = `\
 grove resume — re-enter an existing worktree and continue the last Claude session
@@ -83,6 +84,18 @@ export async function runResume(argv: string[]): Promise<number> {
     worktreePath = wt.path;
     gitDirs = collectSingleGitDirs(project.repoRoot, wt.path);
     ensureStatusLine(worktreePath, singleStatusLineText(slug.full));
+  }
+
+  // Re-assert the shared symlink chains before launching: this also heals
+  // worktrees left with empty bind mountpoints by earlier grove versions.
+  const shared = ensureSharedLinks({
+    rootDir,
+    worktreePath,
+    shareReadOnly: project.config.sandbox.shareReadOnly,
+    shareReadWrite: project.config.sandbox.shareReadWrite,
+  });
+  for (const entry of [...shared.linked, ...shared.repaired]) {
+    process.stderr.write(`\x1b[36m[grove]\x1b[0m relinked ${entry}\n`);
   }
 
   const sandboxed = buildSandbox({
