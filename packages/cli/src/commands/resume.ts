@@ -9,7 +9,7 @@ import {
   repoAbsPath,
 } from '../lib/worktree.js';
 import { buildSandbox, resolveWorktreeGitDir } from '../lib/sandbox.js';
-import { buildClaudeArgv } from '../lib/claude.js';
+import { buildClaudeArgv, hasClaudeSession } from '../lib/claude.js';
 import { ensureStatusLine } from '../lib/claude-settings.js';
 import { workspaceStatusLineText, singleStatusLineText } from '../lib/status-line.js';
 import { execInteractive } from '../lib/exec.js';
@@ -56,12 +56,6 @@ export async function runResume(argv: string[]): Promise<number> {
     enabled: project.config.sandbox.enabled && !values['no-sandbox'],
   };
 
-  const claude = buildClaudeArgv({
-    claude: project.config.claude,
-    passthrough,
-    resume: true,
-  });
-
   let rootDir: string;
   let worktreePath: string;
   let gitDirs: string[];
@@ -97,6 +91,19 @@ export async function runResume(argv: string[]): Promise<number> {
   for (const entry of [...shared.linked, ...shared.repaired]) {
     process.stderr.write(`\x1b[36m[grove]\x1b[0m relinked ${entry}\n`);
   }
+
+  const resume = hasClaudeSession(worktreePath);
+  if (!resume) {
+    process.stderr.write(
+      `No previous Claude session in ${worktreePath} — starting a new one.\n`,
+    );
+  }
+
+  const claude = buildClaudeArgv({
+    claude: project.config.claude,
+    passthrough,
+    resume,
+  });
 
   const sandboxed = buildSandbox({
     rootDir,
