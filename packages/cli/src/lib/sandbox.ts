@@ -118,7 +118,7 @@ function buildBwrap(input: BuildSandboxInput): SandboxArgv {
 
   args.push('--chdir', input.worktreePath);
   args.push('--clearenv');
-  for (const [k, v] of Object.entries(buildSandboxEnv(home, resolved))) {
+  for (const [k, v] of Object.entries(buildSandboxEnv(home, resolved, 'linux', input.worktreePath))) {
     args.push('--setenv', k, v);
   }
 
@@ -182,6 +182,12 @@ function buildSeatbelt(input: BuildSandboxInput): SandboxArgv {
   const sshAuthSock = process.env.SSH_AUTH_SOCK;
   if (sshAuthSock && fs.existsSync(sshAuthSock)) readSubpaths.push(canonical(path.dirname(sshAuthSock)));
 
+  // Claude on macOS stores OAuth credentials in the login keychain; the
+  // Security framework reads the keychain db directly (mach-lookup to
+  // securityd is already allowed above via the global mach-lookup rule).
+  const keychains = path.join(home, 'Library/Keychains');
+  if (fs.existsSync(keychains)) readSubpaths.push(canonical(keychains));
+
   // Writable regions — also readable.
   const writeSubpaths: string[] = [canonical(input.worktreePath)];
   for (const dir of input.gitDirs ?? []) {
@@ -191,8 +197,11 @@ function buildSeatbelt(input: BuildSandboxInput): SandboxArgv {
     const abs = path.resolve(input.rootDir, share);
     if (fs.existsSync(abs)) writeSubpaths.push(canonical(abs));
   }
-  const claudeDir = path.join(home, '.claude');
-  if (fs.existsSync(claudeDir)) writeSubpaths.push(canonical(claudeDir));
+  // Unconditional so a fresh install can create ~/.claude inside the sandbox.
+  const claudeDir = process.env.CLAUDE_CONFIG_DIR
+    ? path.resolve(process.env.CLAUDE_CONFIG_DIR)
+    : path.join(home, '.claude');
+  writeSubpaths.push(canonical(claudeDir));
   for (const t of ['/private/tmp', '/private/var/folders', process.env.TMPDIR]) {
     if (t && fs.existsSync(t)) writeSubpaths.push(canonical(t));
   }
@@ -204,21 +213,24 @@ function buildSeatbelt(input: BuildSandboxInput): SandboxArgv {
     if (fs.existsSync(abs)) readSubpaths.push(canonical(abs));
   }
 
-  const writeLiterals: string[] = [];
-  const claudeJson = path.join(home, '.claude.json');
-  if (fs.existsSync(claudeJson)) writeLiterals.push(canonical(claudeJson));
+  // ~/.claude.json is rewritten atomically: Claude writes a temp sibling
+  // (.claude.json.<hash>), renames it over the original, and keeps a
+  // .claude.json.backup. A prefix match covers the whole family, read+write —
+  // a bare write literal on .claude.json alone breaks startup (config
+  // unreadable) and every save (temp sibling unwritable).
+  const rwPrefixes = [canonical(path.join(home, '.claude.json'))];
 
   const profile = buildSeatbeltProfile({
     read: unique([...readSubpaths, ...writeSubpaths]),
     write: unique(writeSubpaths),
-    writeLiterals: unique(writeLiterals),
+    rwPrefixes: unique(rwPrefixes),
   });
   const program = resolveProgram(input.program);
 
   return {
     command: sandboxExec,
     args: ['-p', profile, program, ...input.programArgs],
-    env: buildSandboxEnv(home, resolved, 'darwin'),
+    env: buildSandboxEnv(home, resolved, 'darwin', input.worktreePath),
   };
 }
 
@@ -233,7 +245,8 @@ function toolReadPaths(home: string, resolved: ResolvedTools): string[] {
 interface SeatbeltPaths {
   read: string[];
   write: string[];
-  writeLiterals: string[];
+  /** Absolute path prefixes allowed read+write via regex, e.g. ~/.claude.json*. */
+  rwPrefixes: string[];
 }
 
 function buildSeatbeltProfile(paths: SeatbeltPaths): string {
@@ -242,22 +255,32 @@ function buildSeatbeltProfile(paths: SeatbeltPaths): string {
     '(deny default)',
     '(allow process-exec*)',
     '(allow process-fork)',
-    '(allow signal (target self))',
+    // Node/libuv stat their own (and spawned children's) processes via
+    // proc_pidinfo; Claude also signals its child shells (timeouts, Ctrl-C),
+    // so `target self` is not enough.
+    '(allow process-info*)',
+    '(allow signal (target same-sandbox))',
     '(allow sysctl-read)',
     '(allow mach-lookup)',
     '(allow ipc-posix-shm)',
     '(allow iokit-open)',
     '(allow system-socket)',
     '(allow network*)',
+    // Interactive terminal: raw-mode ioctls on the inherited tty (Ink dies
+    // instantly without them) and pty allocation for shell tools. ioctl needs
+    // an open fd, so the file-read/file-write confinement still gates it.
+    '(allow file-ioctl)',
+    '(allow pseudo-tty)',
     // Metadata (stat) must be global so the kernel can resolve path components.
     '(allow file-read-metadata)',
     '(allow file-read*',
   ];
   for (const p of paths.read) lines.push(`  (subpath ${sbplString(p)})`);
+  for (const p of paths.rwPrefixes) lines.push(`  (regex ${sbplPrefixRegex(p)})`);
   lines.push(')');
   lines.push('(allow file-write*');
   for (const p of paths.write) lines.push(`  (subpath ${sbplString(p)})`);
-  for (const p of paths.writeLiterals) lines.push(`  (literal ${sbplString(p)})`);
+  for (const p of paths.rwPrefixes) lines.push(`  (regex ${sbplPrefixRegex(p)})`);
   lines.push(')');
   return lines.join('\n') + '\n';
 }
@@ -265,6 +288,12 @@ function buildSeatbeltProfile(paths: SeatbeltPaths): string {
 /** Quote a path as an SBPL string literal, escaping backslashes and quotes. */
 function sbplString(p: string): string {
   return `"${p.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+/** Anchored SBPL regex literal matching `prefix` and anything appended to it. */
+function sbplPrefixRegex(prefix: string): string {
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return `#"^${escaped.replace(/"/g, '\\"')}"`;
 }
 
 function resolveSandboxExec(): string {
@@ -417,6 +446,7 @@ function buildSandboxEnv(
   home: string,
   resolved: ResolvedTools,
   platform: NodeJS.Platform = process.platform,
+  worktreePath?: string,
 ): Record<string, string> {
   const env: Record<string, string> = {
     HOME: home,
@@ -426,11 +456,16 @@ function buildSandboxEnv(
     LANG: process.env.LANG || 'en_US.UTF-8',
     PATH: buildSandboxPath(home, resolved, platform),
   };
+  if (worktreePath) env.PWD = worktreePath;
   if (process.env.ANTHROPIC_API_KEY) env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
   if (process.env.SSH_AUTH_SOCK) env.SSH_AUTH_SOCK = process.env.SSH_AUTH_SOCK;
   if (process.env.COLORTERM) env.COLORTERM = process.env.COLORTERM;
-  // sandbox-exec inherits this env directly; macOS tools rely on TMPDIR.
-  if (platform === 'darwin' && process.env.TMPDIR) env.TMPDIR = process.env.TMPDIR;
+  if (platform === 'darwin') {
+    // sandbox-exec inherits this env directly; macOS tools rely on TMPDIR.
+    if (process.env.TMPDIR) env.TMPDIR = process.env.TMPDIR;
+    // The seatbelt profile grants rw on this dir instead of ~/.claude.
+    if (process.env.CLAUDE_CONFIG_DIR) env.CLAUDE_CONFIG_DIR = process.env.CLAUDE_CONFIG_DIR;
+  }
   return env;
 }
 

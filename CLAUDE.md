@@ -133,13 +133,17 @@ When `sandbox.enabled` is true, `grove new` / `grove resume` re-exec Claude insi
 
 Seatbelt can't remount the filesystem the way `bwrap` does, so Grove generates a deny-by-default SBPL profile (passed inline via `-p`) and re-allows just what a dev session needs:
 
-- `(deny default)`, then `process-exec*`, `process-fork`, `signal (target self)`, `sysctl-read`, `mach-lookup`, `ipc-posix-shm`, `iokit-open`, `system-socket`, and `network*` (so Claude reaches the API).
-- **Reads** (`file-read*`) are confined to system paths needed to load binaries (`/usr`, `/System`, `/Library`, `/bin`, `/sbin`, `/opt`, `/dev`, `/private/etc`, `/private/var/{db,run,folders}`), home-local tool installs (`.local/bin`, `.local/share/claude`, the `node` prefix, `$PNPM_HOME`), auth (`.gitconfig`, `.config/git`, `.config/gh`, `.config/glab-cli`, `.ssh`, the `SSH_AUTH_SOCK` dir), `sandbox.shareReadOnly`, and everything in the write set below. The agent **cannot read file contents outside its worktree.**
-- **Writes** (`file-write*`) are limited to the worktree, the gitdirs, `sandbox.shareReadWrite`, `~/.claude`, `~/.claude.json`, the temp dirs (`/private/tmp`, `/private/var/folders`, `$TMPDIR`), and `/dev`.
+- `(deny default)`, then `process-exec*`, `process-fork`, `process-info*`, `signal (target same-sandbox)` (Claude must signal its child shells, not just itself), `sysctl-read`, `mach-lookup`, `ipc-posix-shm`, `iokit-open`, `system-socket`, `network*` (so Claude reaches the API), `file-ioctl` (tty raw mode — Ink dies without it; gated by the read/write confinement since ioctl needs an open fd), and `pseudo-tty` (shell tools).
+- **Reads** (`file-read*`) are confined to system paths needed to load binaries (`/usr`, `/System`, `/Library`, `/bin`, `/sbin`, `/opt`, `/dev`, `/private/etc`, `/private/var/{db,run,folders}`), home-local tool installs (`.local/bin`, `.local/share/claude`, the `node` prefix, `$PNPM_HOME`), auth (`.gitconfig`, `.config/git`, `.config/gh`, `.config/glab-cli`, `.ssh`, the `SSH_AUTH_SOCK` dir, `~/Library/Keychains` for OAuth creds), `sandbox.shareReadOnly`, and everything in the write set below. The agent **cannot read file contents outside its worktree.**
+- **Writes** (`file-write*`) are limited to the worktree, the gitdirs, `sandbox.shareReadWrite`, `~/.claude` (or `$CLAUDE_CONFIG_DIR`), the temp dirs (`/private/tmp`, `/private/var/folders`, `$TMPDIR`), and `/dev`. `~/.claude.json` is allowed read+write via an anchored prefix regex so the whole family Claude touches (`.claude.json`, `.claude.json.backup`, atomic-write temp siblings) works — a bare literal on the file itself breaks startup and every config save.
 - `file-read-metadata` is allowed globally because the kernel must stat ancestor path components to resolve any path — so existence/size of arbitrary paths leaks, but file *contents* outside the allowed subpaths do not. All subpaths are canonicalized (`realpath`) so symlinked roots like `/tmp` → `/private/tmp` match. The spawned process inherits the same curated env as the Linux path (plus `TMPDIR`).
 - Override `sandbox-exec` location with `GROVE_SANDBOX_EXEC_PATH`.
 
 Pass `--no-sandbox` to skip sandboxing entirely on either platform.
+
+### Worktree pinning
+
+Because the worktree lives *inside* the main checkout, Claude inherits parent-directory `CLAUDE.md` files and sees symlink targets that resolve to the root, and tends to drift out of the worktree. `grove new`/`grove resume` therefore append `--append-system-prompt` (built in `buildClaudeArgv`, `lib/claude.ts`) telling Claude its worktree is the project root and the main checkout is off-limits. Skipped when the user passes their own `--append-system-prompt` via `claude.extraArgs` or `-- …`.
 
 ## Conventions
 
