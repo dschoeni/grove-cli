@@ -103,6 +103,12 @@ export async function runResume(argv: string[]): Promise<number> {
     claude: project.config.claude,
     passthrough,
     resume,
+    worktree: {
+      worktreePath,
+      rootDir,
+      branch: slug.full,
+      workspace: project.kind === 'workspace',
+    },
   });
 
   const sandboxed = buildSandbox({

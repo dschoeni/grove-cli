@@ -166,7 +166,17 @@ async function runNewSingle(
 
   ensureStatusLine(worktreePath, singleStatusLineText(slug.full));
 
-  const claude = buildClaudeArgv({ claude: project.config.claude, passthrough, resume: false });
+  const claude = buildClaudeArgv({
+    claude: project.config.claude,
+    passthrough,
+    resume: false,
+    worktree: {
+      worktreePath,
+      rootDir: project.repoRoot,
+      branch: slug.full,
+      workspace: false,
+    },
+  });
   const sandboxed = buildSandbox({
     rootDir: project.repoRoot,
     worktreePath,
@@ -250,7 +260,17 @@ async function runNewWorkspace(
 
   ensureStatusLine(worktreePath, workspaceStatusLineText(workspaceRoot, slug.full));
 
-  const claude = buildClaudeArgv({ claude: config.claude, passthrough, resume: false });
+  const claude = buildClaudeArgv({
+    claude: config.claude,
+    passthrough,
+    resume: false,
+    worktree: {
+      worktreePath,
+      rootDir: workspaceRoot,
+      branch: slug.full,
+      workspace: true,
+    },
+  });
   const sandboxed = buildSandbox({
     rootDir: workspaceRoot,
     worktreePath,
