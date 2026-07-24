@@ -10,7 +10,7 @@ import {
 } from '../lib/worktree.js';
 import { buildSandbox, resolveWorktreeGitDir } from '../lib/sandbox.js';
 import { buildClaudeArgv, hasClaudeSession } from '../lib/claude.js';
-import { ensureStatusLine } from '../lib/claude-settings.js';
+import { ensureStatusLine, mergeLocalSettings } from '../lib/claude-settings.js';
 import { workspaceStatusLineText, singleStatusLineText } from '../lib/status-line.js';
 import { execInteractive } from '../lib/exec.js';
 import { splitPassthrough } from '../lib/argv.js';
@@ -23,7 +23,7 @@ Usage:
   grove resume <slug> [--no-sandbox] [-- <claude-args>…]
 
 Flags:
-  --no-sandbox           Skip bwrap.
+  --no-sandbox           Skip the sandbox.
   --                     Stop flag parsing; remaining args are passed to claude.
 `;
 
@@ -119,6 +119,7 @@ export async function runResume(argv: string[]): Promise<number> {
     program: claude.program,
     programArgs: claude.args,
   });
+  if (sandboxed.localSettings) mergeLocalSettings(worktreePath, sandboxed.localSettings);
 
   return execInteractive({
     command: sandboxed.command,

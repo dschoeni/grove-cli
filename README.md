@@ -1,6 +1,6 @@
 # Grove
 
-A small CLI that creates a git worktree, runs your setup, and launches Claude Code inside a `bwrap` sandbox. Local-only, no daemon, zero runtime dependencies.
+A small CLI that creates a git worktree, runs your setup, and launches Claude Code inside a sandbox — `bwrap` on Linux, Claude Code's built-in sandbox on macOS. Local-only, no daemon, zero runtime dependencies.
 
 ```bash
 grove new feat/auth-flow
@@ -10,7 +10,7 @@ grove new feat/auth-flow
 
 ## Install
 
-Requires Node ≥ 20 and `pnpm`. `bwrap` is needed for sandboxing (apt: `bubblewrap`); use `--no-sandbox` if you don't want it.
+Requires Node ≥ 20 and `pnpm`. On Linux, `bwrap` is needed for sandboxing (apt: `bubblewrap`); on macOS nothing extra is needed. Use `--no-sandbox` if you don't want sandboxing.
 
 ```bash
 pnpm install
@@ -40,7 +40,7 @@ grove completion <bash|zsh>      # print a completion script
 
 `<slug>` must start with one of `feat/`, `fix/`, `chore/`. Anything after `--` is passed straight through to `claude`.
 
-`grove new` flags: `--from <branch>` overrides the base branch, `--fetch` fetches the default remote first (so the base and `origin/<slug>` are current), `--no-sandbox` skips `bwrap`, `--keep-on-failure` leaves a half-set-up worktree in place if `postCreateCommands` exit non-zero, `--dry-run` prints the plan and exits.
+`grove new` flags: `--from <branch>` overrides the base branch, `--fetch` fetches the default remote first (so the base and `origin/<slug>` are current), `--no-sandbox` skips the sandbox, `--keep-on-failure` leaves a half-set-up worktree in place if `postCreateCommands` exit non-zero, `--dry-run` prints the plan and exits.
 
 **Branch reuse.** If a branch matching `<slug>` already exists, `grove new` reuses it instead of erroring: a local branch is checked out as-is, otherwise a local branch tracking `origin/<slug>` is created. Only when neither exists is a fresh branch cut from the base (so `--from` is ignored on reuse/adopt). A branch that's already checked out in another worktree is refused with a pointer to `grove resume`.
 

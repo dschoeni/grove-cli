@@ -17,7 +17,7 @@ import { ensureSharedLinks } from '../lib/shared.js';
 import { runPostCreateCommands } from '../lib/post-create.js';
 import { buildSandbox, resolveWorktreeGitDir } from '../lib/sandbox.js';
 import { buildClaudeArgv } from '../lib/claude.js';
-import { ensureStatusLine } from '../lib/claude-settings.js';
+import { ensureStatusLine, mergeLocalSettings } from '../lib/claude-settings.js';
 import { workspaceStatusLineText, singleStatusLineText } from '../lib/status-line.js';
 import { execInteractive } from '../lib/exec.js';
 import { splitPassthrough } from '../lib/argv.js';
@@ -41,7 +41,7 @@ Flags:
                          In workspace mode, overrides every repo's baseBranch.
                          Ignored when an existing branch is reused/adopted.
   --fetch                git fetch the default remote first, so base and origin/<slug> are current.
-  --no-sandbox           Skip bwrap. Launches claude in the worktree directly.
+  --no-sandbox           Skip the sandbox. Launches claude in the worktree directly.
   --keep-on-failure      On postCreateCommand failure, leave the worktree in place.
   --dry-run              Print the planned actions and exit before any side effects.
   --                     Stop flag parsing; remaining args are passed to claude.
@@ -185,6 +185,7 @@ async function runNewSingle(
     program: claude.program,
     programArgs: claude.args,
   });
+  if (sandboxed.localSettings) mergeLocalSettings(worktreePath, sandboxed.localSettings);
   return execInteractive({
     command: sandboxed.command,
     args: sandboxed.args,
@@ -279,6 +280,7 @@ async function runNewWorkspace(
     program: claude.program,
     programArgs: claude.args,
   });
+  if (sandboxed.localSettings) mergeLocalSettings(worktreePath, sandboxed.localSettings);
   return execInteractive({
     command: sandboxed.command,
     args: sandboxed.args,

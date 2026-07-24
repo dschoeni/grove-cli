@@ -22,17 +22,28 @@ export interface SandboxArgv {
   command: string;
   args: string[];
   env: NodeJS.ProcessEnv;
+  /**
+   * When set, merge into `<worktree>/.claude/settings.local.json` before
+   * launch (macOS: enables/disables Claude Code's built-in sandbox).
+   */
+  localSettings?: Record<string, unknown>;
 }
 
 /**
  * Build the argv to launch `program` inside a sandbox.
  *
+ * Linux wraps the process in bwrap (a mount namespace exposing only what is
+ * bound). macOS launches Claude directly and drives Claude Code's *built-in*
+ * sandbox instead, via a settings.local.json patch the caller applies.
  * When sandbox is disabled, returns `{ command: program, args: programArgs }`
- * with cwd handled by the caller. Otherwise dispatches by platform: bwrap on
- * Linux (a mount namespace exposing only what is bound), sandbox-exec on macOS
- * (a Seatbelt write-confinement profile over the real filesystem).
+ * with cwd handled by the caller.
  */
 export function buildSandbox(input: BuildSandboxInput): SandboxArgv {
+  // macOS always takes the native path: even --no-sandbox must write
+  // sandbox.enabled=false so settings from a previous sandboxed launch
+  // don't keep applying.
+  if (process.platform === 'darwin') return buildNativeSandbox(input);
+
   if (!input.sandbox.enabled) {
     return {
       command: input.program,
@@ -41,7 +52,6 @@ export function buildSandbox(input: BuildSandboxInput): SandboxArgv {
     };
   }
 
-  if (process.platform === 'darwin') return buildSeatbelt(input);
   if (process.platform === 'linux') return buildBwrap(input);
   throw new GroveError(
     `Sandboxing is not supported on ${process.platform}. Pass --no-sandbox to run without it.`,
@@ -118,7 +128,7 @@ function buildBwrap(input: BuildSandboxInput): SandboxArgv {
 
   args.push('--chdir', input.worktreePath);
   args.push('--clearenv');
-  for (const [k, v] of Object.entries(buildSandboxEnv(home, resolved, 'linux', input.worktreePath))) {
+  for (const [k, v] of Object.entries(buildSandboxEnv(home, resolved, input.worktreePath))) {
     args.push('--setenv', k, v);
   }
 
@@ -132,191 +142,50 @@ function buildBwrap(input: BuildSandboxInput): SandboxArgv {
 }
 
 /**
- * macOS: launch `program` under sandbox-exec with a Seatbelt profile that
- * denies everything by default, then re-allows the operations a dev session
- * needs (exec, network, mach lookups) plus *content* reads and writes within a
- * confined set of paths. Reads are restricted to the worktree, the gitdirs,
- * declared shares, Claude/tool state, and the system paths required to run
- * binaries — so the agent cannot read files outside its workspace. Writes are
- * the read-write subset of that (worktree, gitdirs, rw shares, Claude state,
- * temp).
+ * macOS: launch `program` directly and enable Claude Code's *built-in*
+ * sandbox (Seatbelt-based, nothing to install) instead of wrapping the
+ * process. A hand-rolled sandbox-exec profile keeps fighting Claude's own
+ * needs — tty raw mode, keychain reads, atomic config writes — while the
+ * native sandbox is maintained against them. It confines Bash commands and
+ * their child processes to the worktree plus the session temp dir at the OS
+ * level, and gates network access per domain. Read/Edit/Write file tools
+ * follow the permission system rather than the sandbox; the worktree-pinning
+ * system prompt (lib/claude.ts) covers those.
  *
- * `file-read-metadata` is allowed globally: the kernel needs to stat ancestor
- * path components to resolve any path at all, so existence/size of arbitrary
- * paths leaks, but file *contents* outside the allowed subpaths do not.
+ * The returned `localSettings` patch is merged into the worktree's
+ * .claude/settings.local.json by the caller before launch. gitdirs and
+ * shareReadWrite sources live outside the worktree, so they are granted via
+ * sandbox.filesystem.allowWrite; shareReadOnly needs nothing (native default
+ * read policy is broad).
  */
-function buildSeatbelt(input: BuildSandboxInput): SandboxArgv {
-  const sandboxExec = resolveSandboxExec();
-  const resolved = resolveTools();
-  const home = os.homedir();
-
-  // System paths required to load and run binaries (dyld cache, frameworks,
-  // shells, brew, resolver config, device nodes).
-  const readSubpaths: string[] = [];
-  for (const dir of [
-    '/usr',
-    '/System',
-    '/Library',
-    '/bin',
-    '/sbin',
-    '/opt',
-    '/dev',
-    '/private/etc',
-    '/private/var/db',
-    '/private/var/run',
-    '/private/var/folders',
-  ]) {
-    if (fs.existsSync(dir)) readSubpaths.push(dir);
-  }
-
-  // Tool installs that may live under $HOME (nvm node, ~/.local/share/claude).
-  for (const p of toolReadPaths(home, resolved)) {
-    if (fs.existsSync(p)) readSubpaths.push(canonical(p));
-  }
-
-  // Identity / auth, read-only.
-  for (const rel of ['.gitconfig', '.config/git', '.config/gh', '.config/glab-cli', '.ssh']) {
-    const p = path.join(home, rel);
-    if (fs.existsSync(p)) readSubpaths.push(canonical(p));
-  }
-  const sshAuthSock = process.env.SSH_AUTH_SOCK;
-  if (sshAuthSock && fs.existsSync(sshAuthSock)) readSubpaths.push(canonical(path.dirname(sshAuthSock)));
-
-  // Claude on macOS stores OAuth credentials in the login keychain; the
-  // Security framework reads the keychain db directly (mach-lookup to
-  // securityd is already allowed above via the global mach-lookup rule).
-  const keychains = path.join(home, 'Library/Keychains');
-  if (fs.existsSync(keychains)) readSubpaths.push(canonical(keychains));
-
-  // Writable regions — also readable.
-  const writeSubpaths: string[] = [canonical(input.worktreePath)];
+function buildNativeSandbox(input: BuildSandboxInput): SandboxArgv {
+  const allowWrite: string[] = [];
   for (const dir of input.gitDirs ?? []) {
-    if (fs.existsSync(dir)) writeSubpaths.push(canonical(dir));
+    if (fs.existsSync(dir)) allowWrite.push(canonical(dir));
   }
   for (const share of input.sandbox.shareReadWrite) {
     const abs = path.resolve(input.rootDir, share);
-    if (fs.existsSync(abs)) writeSubpaths.push(canonical(abs));
-  }
-  // Unconditional so a fresh install can create ~/.claude inside the sandbox.
-  const claudeDir = process.env.CLAUDE_CONFIG_DIR
-    ? path.resolve(process.env.CLAUDE_CONFIG_DIR)
-    : path.join(home, '.claude');
-  writeSubpaths.push(canonical(claudeDir));
-  for (const t of ['/private/tmp', '/private/var/folders', process.env.TMPDIR]) {
-    if (t && fs.existsSync(t)) writeSubpaths.push(canonical(t));
-  }
-  writeSubpaths.push('/dev');
-
-  // Read-only shares declared in .groverc (resolve symlink targets back in the repo).
-  for (const share of input.sandbox.shareReadOnly) {
-    const abs = path.resolve(input.rootDir, share);
-    if (fs.existsSync(abs)) readSubpaths.push(canonical(abs));
+    if (fs.existsSync(abs)) allowWrite.push(canonical(abs));
   }
 
-  // ~/.claude.json is rewritten atomically: Claude writes a temp sibling
-  // (.claude.json.<hash>), renames it over the original, and keeps a
-  // .claude.json.backup. A prefix match covers the whole family, read+write —
-  // a bare write literal on .claude.json alone breaks startup (config
-  // unreadable) and every save (temp sibling unwritable).
-  const rwPrefixes = [canonical(path.join(home, '.claude.json'))];
-
-  const profile = buildSeatbeltProfile({
-    read: unique([...readSubpaths, ...writeSubpaths]),
-    write: unique(writeSubpaths),
-    rwPrefixes: unique(rwPrefixes),
-  });
-  const program = resolveProgram(input.program);
+  const localSettings: Record<string, unknown> = input.sandbox.enabled
+    ? {
+        sandbox: {
+          enabled: true,
+          autoAllowBashIfSandboxed: true,
+          filesystem: { allowWrite: unique(allowWrite) },
+        },
+      }
+    : // Explicit false: settings.local.json persists across launches, so a
+      // --no-sandbox run must overwrite what a sandboxed run wrote.
+      { sandbox: { enabled: false } };
 
   return {
-    command: sandboxExec,
-    args: ['-p', profile, program, ...input.programArgs],
-    env: buildSandboxEnv(home, resolved, 'darwin', input.worktreePath),
+    command: input.program,
+    args: input.programArgs,
+    env: passthroughEnv(input.worktreePath),
+    localSettings,
   };
-}
-
-/** Home-local tool install dirs that must be readable to run node/claude/pnpm. */
-function toolReadPaths(home: string, resolved: ResolvedTools): string[] {
-  const paths = [path.join(home, '.local/bin'), path.join(home, '.local/share/claude')];
-  if (resolved.node) paths.push(path.resolve(path.dirname(resolved.node), '..'));
-  paths.push(process.env.PNPM_HOME || path.join(home, '.local/share/pnpm'));
-  return paths;
-}
-
-interface SeatbeltPaths {
-  read: string[];
-  write: string[];
-  /** Absolute path prefixes allowed read+write via regex, e.g. ~/.claude.json*. */
-  rwPrefixes: string[];
-}
-
-function buildSeatbeltProfile(paths: SeatbeltPaths): string {
-  const lines = [
-    '(version 1)',
-    '(deny default)',
-    '(allow process-exec*)',
-    '(allow process-fork)',
-    // Node/libuv stat their own (and spawned children's) processes via
-    // proc_pidinfo; Claude also signals its child shells (timeouts, Ctrl-C),
-    // so `target self` is not enough.
-    '(allow process-info*)',
-    '(allow signal (target same-sandbox))',
-    '(allow sysctl-read)',
-    '(allow mach-lookup)',
-    '(allow ipc-posix-shm)',
-    '(allow iokit-open)',
-    '(allow system-socket)',
-    '(allow network*)',
-    // Interactive terminal: raw-mode ioctls on the inherited tty (Ink dies
-    // instantly without them) and pty allocation for shell tools. ioctl needs
-    // an open fd, so the file-read/file-write confinement still gates it.
-    '(allow file-ioctl)',
-    '(allow pseudo-tty)',
-    // Metadata (stat) must be global so the kernel can resolve path components.
-    '(allow file-read-metadata)',
-    '(allow file-read*',
-  ];
-  for (const p of paths.read) lines.push(`  (subpath ${sbplString(p)})`);
-  for (const p of paths.rwPrefixes) lines.push(`  (regex ${sbplPrefixRegex(p)})`);
-  lines.push(')');
-  lines.push('(allow file-write*');
-  for (const p of paths.write) lines.push(`  (subpath ${sbplString(p)})`);
-  for (const p of paths.rwPrefixes) lines.push(`  (regex ${sbplPrefixRegex(p)})`);
-  lines.push(')');
-  return lines.join('\n') + '\n';
-}
-
-/** Quote a path as an SBPL string literal, escaping backslashes and quotes. */
-function sbplString(p: string): string {
-  return `"${p.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-}
-
-/** Anchored SBPL regex literal matching `prefix` and anything appended to it. */
-function sbplPrefixRegex(prefix: string): string {
-  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return `#"^${escaped.replace(/"/g, '\\"')}"`;
-}
-
-function resolveSandboxExec(): string {
-  const candidate = process.env.GROVE_SANDBOX_EXEC_PATH || '/usr/bin/sandbox-exec';
-  try {
-    fs.accessSync(candidate, fs.constants.X_OK);
-    return candidate;
-  } catch {
-    throw new GroveError(
-      `sandbox-exec not found (looked for "${candidate}"). Pass --no-sandbox to run without a sandbox.`,
-    );
-  }
-}
-
-/** Resolve a bare program name to an absolute path so sandbox-exec can exec it. */
-function resolveProgram(program: string): string {
-  if (program.includes('/')) return program;
-  try {
-    const p = execSync(`which ${program}`, { encoding: 'utf-8' }).trim();
-    return p || program;
-  } catch {
-    return program;
-  }
 }
 
 /** Canonicalize a path (resolve symlinks like /tmp → /private/tmp) for subpath matching. */
@@ -445,8 +314,7 @@ export function resolveWorktreeGitDir(worktreePath: string): string | null {
 function buildSandboxEnv(
   home: string,
   resolved: ResolvedTools,
-  platform: NodeJS.Platform = process.platform,
-  worktreePath?: string,
+  worktreePath: string,
 ): Record<string, string> {
   const env: Record<string, string> = {
     HOME: home,
@@ -454,26 +322,16 @@ function buildSandboxEnv(
     TERM: process.env.TERM || 'xterm-256color',
     SHELL: '/bin/bash',
     LANG: process.env.LANG || 'en_US.UTF-8',
-    PATH: buildSandboxPath(home, resolved, platform),
+    PATH: buildSandboxPath(home, resolved),
+    PWD: worktreePath,
   };
-  if (worktreePath) env.PWD = worktreePath;
   if (process.env.ANTHROPIC_API_KEY) env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
   if (process.env.SSH_AUTH_SOCK) env.SSH_AUTH_SOCK = process.env.SSH_AUTH_SOCK;
   if (process.env.COLORTERM) env.COLORTERM = process.env.COLORTERM;
-  if (platform === 'darwin') {
-    // sandbox-exec inherits this env directly; macOS tools rely on TMPDIR.
-    if (process.env.TMPDIR) env.TMPDIR = process.env.TMPDIR;
-    // The seatbelt profile grants rw on this dir instead of ~/.claude.
-    if (process.env.CLAUDE_CONFIG_DIR) env.CLAUDE_CONFIG_DIR = process.env.CLAUDE_CONFIG_DIR;
-  }
   return env;
 }
 
-function buildSandboxPath(
-  home: string,
-  resolved: ResolvedTools,
-  platform: NodeJS.Platform,
-): string {
+function buildSandboxPath(home: string, resolved: ResolvedTools): string {
   const dirs = new Set<string>([
     '/usr/local/sbin',
     '/usr/local/bin',
@@ -487,11 +345,7 @@ function buildSandboxPath(
   for (const v of Object.values(resolved)) {
     if (v) dirs.add(path.dirname(v));
   }
-  if (platform === 'darwin') {
-    for (const d of ['/opt/homebrew/bin', '/opt/homebrew/sbin']) {
-      if (fs.existsSync(d)) dirs.add(d);
-    }
-  } else if (fs.existsSync('/home/linuxbrew/.linuxbrew/bin')) {
+  if (fs.existsSync('/home/linuxbrew/.linuxbrew/bin')) {
     dirs.add('/home/linuxbrew/.linuxbrew/bin');
   }
   return Array.from(dirs).join(':');

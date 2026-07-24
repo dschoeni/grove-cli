@@ -2,14 +2,17 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 /**
- * Ensure `<worktreeDir>/.claude/settings.local.json` has a statusLine command
- * that prints `text`. Preserves any other keys already in the file.
+ * Deep-merge `patch` into `<worktreeDir>/.claude/settings.local.json`,
+ * preserving any keys the patch doesn't touch. Nested plain objects merge;
+ * arrays and scalars are replaced wholesale (so grove-managed lists like
+ * `sandbox.filesystem.allowWrite` reflect the current config, not an
+ * accumulation of past runs).
  *
  * `.claude/settings.local.json` is the per-project, gitignored override Claude
- * Code reads from cwd at startup. Writing it here means the launched agent
- * shows the slug in its status bar without polluting the committed settings.
+ * Code reads from cwd at startup — the right place for per-worktree launch
+ * state without polluting the committed settings.
  */
-export function ensureStatusLine(worktreeDir: string, text: string): void {
+export function mergeLocalSettings(worktreeDir: string, patch: Record<string, unknown>): void {
   const claudeDir = path.join(worktreeDir, '.claude');
   const settingsPath = path.join(claudeDir, 'settings.local.json');
 
@@ -25,13 +28,35 @@ export function ensureStatusLine(worktreeDir: string, text: string): void {
     }
   }
 
-  settings.statusLine = {
-    type: 'command',
-    command: `printf '%s' ${shellQuote(text)}`,
-  };
+  deepMerge(settings, patch);
 
   fs.mkdirSync(claudeDir, { recursive: true });
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
+}
+
+/** Ensure the settings file has a statusLine command that prints `text`. */
+export function ensureStatusLine(worktreeDir: string, text: string): void {
+  mergeLocalSettings(worktreeDir, {
+    statusLine: {
+      type: 'command',
+      command: `printf '%s' ${shellQuote(text)}`,
+    },
+  });
+}
+
+function deepMerge(target: Record<string, unknown>, patch: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(patch)) {
+    const existing = target[key];
+    if (isPlainObject(existing) && isPlainObject(value)) {
+      deepMerge(existing, value);
+    } else {
+      target[key] = value;
+    }
+  }
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 function shellQuote(s: string): string {
