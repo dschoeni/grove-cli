@@ -4,7 +4,7 @@ Guidance for Claude Code when working in this repository.
 
 ## What This Is
 
-Grove is a single CLI binary, `grove`, that creates a git worktree, optionally runs setup commands, and launches Claude Code inside a sandbox (`bwrap` on Linux, `sandbox-exec`/Seatbelt on macOS). It is local-only, has no daemon, no server, no UI, and zero runtime dependencies — only Node's built-ins. Worktrees live under `<repo>/.grove/<type>/<name>` and are auto-added to `.git/info/exclude` so they don't pollute `git status`.
+Grove is a single CLI binary, `grove`, that creates a git worktree, optionally runs setup commands, and launches Claude Code inside a sandbox (`bwrap` on Linux; Claude Code's built-in sandbox on macOS). It is local-only, has no daemon, no server, no UI, and zero runtime dependencies — only Node's built-ins. Worktrees live under `<repo>/.grove/<type>/<name>` and are auto-added to `.git/info/exclude` so they don't pollute `git status`.
 
 ## Layout
 
@@ -118,7 +118,7 @@ Each `shareReadOnly`/`shareReadWrite` entry is wired on disk as a two-hop symlin
 
 ## Sandbox
 
-When `sandbox.enabled` is true, `grove new` / `grove resume` re-exec Claude inside a sandbox chosen by platform: `bwrap` on Linux, `sandbox-exec` (Apple Seatbelt) on macOS. `buildSandbox` in `lib/sandbox.ts` dispatches on `process.platform`; any other platform errors out (use `--no-sandbox`). Both paths confine the agent's reads and writes to its worktree.
+When `sandbox.enabled` is true, `grove new` / `grove resume` sandbox the session per platform: on Linux the whole Claude process is re-execed inside `bwrap`; on macOS Claude runs directly and grove enables Claude Code's *built-in* sandbox instead. `buildSandbox` in `lib/sandbox.ts` dispatches on `process.platform`; any other platform errors out (use `--no-sandbox`).
 
 ### Linux (`bwrap`)
 
@@ -129,15 +129,15 @@ When `sandbox.enabled` is true, `grove new` / `grove resume` re-exec Claude insi
 - `--clearenv`, then a curated env with `HOME`, `USER`, `TERM`, `SHELL=/bin/bash`, `LANG`, a constructed `PATH`, `ANTHROPIC_API_KEY` (when set), `SSH_AUTH_SOCK`, `COLORTERM`.
 - Override `bwrap` location with `GROVE_BWRAP_PATH`.
 
-### macOS (`sandbox-exec`)
+### macOS (native Claude Code sandbox)
 
-Seatbelt can't remount the filesystem the way `bwrap` does, so Grove generates a deny-by-default SBPL profile (passed inline via `-p`) and re-allows just what a dev session needs:
+Wrapping the whole process in a hand-rolled `sandbox-exec` profile kept fighting Claude's own needs (tty raw mode, keychain reads, atomic config writes), so on macOS grove instead launches `claude` directly and enables Claude Code's built-in sandbox (Seatbelt underneath, nothing to install) by merging a patch into `<worktree>/.claude/settings.local.json` — the same file `ensureStatusLine` already writes. `buildNativeSandbox` (`lib/sandbox.ts`) produces the patch; `mergeLocalSettings` (`lib/claude-settings.ts`) deep-merges it (objects merge, arrays/scalars replace) before launch:
 
-- `(deny default)`, then `process-exec*`, `process-fork`, `process-info*`, `signal (target same-sandbox)` (Claude must signal its child shells, not just itself), `sysctl-read`, `mach-lookup`, `ipc-posix-shm`, `iokit-open`, `system-socket`, `network*` (so Claude reaches the API), `file-ioctl` (tty raw mode — Ink dies without it; gated by the read/write confinement since ioctl needs an open fd), and `pseudo-tty` (shell tools).
-- **Reads** (`file-read*`) are confined to system paths needed to load binaries (`/usr`, `/System`, `/Library`, `/bin`, `/sbin`, `/opt`, `/dev`, `/private/etc`, `/private/var/{db,run,folders}`), home-local tool installs (`.local/bin`, `.local/share/claude`, the `node` prefix, `$PNPM_HOME`), auth (`.gitconfig`, `.config/git`, `.config/gh`, `.config/glab-cli`, `.ssh`, the `SSH_AUTH_SOCK` dir, `~/Library/Keychains` for OAuth creds), `sandbox.shareReadOnly`, and everything in the write set below. The agent **cannot read file contents outside its worktree.**
-- **Writes** (`file-write*`) are limited to the worktree, the gitdirs, `sandbox.shareReadWrite`, `~/.claude` (or `$CLAUDE_CONFIG_DIR`), the temp dirs (`/private/tmp`, `/private/var/folders`, `$TMPDIR`), and `/dev`. `~/.claude.json` is allowed read+write via an anchored prefix regex so the whole family Claude touches (`.claude.json`, `.claude.json.backup`, atomic-write temp siblings) works — a bare literal on the file itself breaks startup and every config save.
-- `file-read-metadata` is allowed globally because the kernel must stat ancestor path components to resolve any path — so existence/size of arbitrary paths leaks, but file *contents* outside the allowed subpaths do not. All subpaths are canonicalized (`realpath`) so symlinked roots like `/tmp` → `/private/tmp` match. The spawned process inherits the same curated env as the Linux path (plus `TMPDIR`).
-- Override `sandbox-exec` location with `GROVE_SANDBOX_EXEC_PATH`.
+- `sandbox.enabled: true` and `autoAllowBashIfSandboxed: true` — Bash commands and all their child processes are OS-confined and run without permission prompts.
+- `sandbox.filesystem.allowWrite`: the gitdirs and each `shareReadWrite` source (canonicalized), since those live outside the worktree. The worktree itself and the session temp dir are writable by default; `shareReadOnly` needs nothing because the native default read policy is broad.
+- Network: native default — no domains pre-allowed; Claude Code prompts once per new domain.
+- `--no-sandbox` writes `sandbox.enabled: false` — settings.local.json persists across launches, so an explicit false must overwrite what a sandboxed run wrote.
+- Scope caveat: the native sandbox confines *Bash commands*; the Read/Edit/Write file tools go through the permission system instead (unrestricted under `bypassPermissions`). The worktree-pinning system prompt (below) is what keeps the file tools inside the worktree.
 
 Pass `--no-sandbox` to skip sandboxing entirely on either platform.
 
