@@ -58,7 +58,7 @@ Flags: `--hard` resets (discarding local divergence), `--remote <name>` override
 
 ## `.groverc`
 
-Optional JSON file at the repo root. With no file present, defaults are: current branch as base, sandbox enabled, no post-create commands, `claude --permission-mode bypassPermissions`.
+Optional JSON file at the repo root. With no file present, defaults are: current branch as base, sandbox enabled, no post-create commands, `claude --permission-mode auto`. Auto mode lets Claude Code's classifier approve actions instead of prompting; if it is unavailable for your account or model, Claude falls back to manual mode. Set `claude.extraArgs` to `["--permission-mode", "bypassPermissions"]` to restore the old skip-everything behavior.
 
 ### Single repo
 
@@ -73,7 +73,7 @@ Optional JSON file at the repo root. With no file present, defaults are: current
   "postCreateCommands": ["pnpm install"],
   "claude": {
     "command": "claude",
-    "extraArgs": ["--permission-mode", "bypassPermissions"]
+    "extraArgs": ["--permission-mode", "auto"]
   }
 }
 ```
@@ -86,7 +86,7 @@ Optional JSON file at the repo root. With no file present, defaults are: current
 | `sandbox.shareReadWrite` | `string[]` | `[]` | Same, but bind-mounted read-write. Use for `node_modules` etc. |
 | `postCreateCommands` | `string[]` | `[]` | Shell commands run sequentially in the new worktree. Non-zero exit aborts (or leaves it in place with `--keep-on-failure`). |
 | `claude.command` | `string` | `"claude"` | Binary to launch. |
-| `claude.extraArgs` | `string[]` | `["--permission-mode","bypassPermissions"]` | Extra flags prepended to Claude's argv. |
+| `claude.extraArgs` | `string[]` | `["--permission-mode","auto"]` | Extra flags prepended to Claude's argv. |
 
 ### Workspace (multi-repo)
 

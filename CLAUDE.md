@@ -73,7 +73,7 @@ Branch resolution lives in `planBranch` (`lib/worktree.ts`) and is shared by sin
 
 ## `.groverc`
 
-Optional JSON file at the repo root. When absent, the CLI uses defaults (current branch as base, sandbox enabled, no post-create commands, `claude --permission-mode bypassPermissions`).
+Optional JSON file at the repo root. When absent, the CLI uses defaults (current branch as base, sandbox enabled, no post-create commands, `claude --permission-mode auto`). Auto mode uses Claude Code's classifier to approve actions instead of prompting and falls back to manual mode when unavailable; set `claude.extraArgs` to `["--permission-mode", "bypassPermissions"]` for the old skip-everything behavior.
 
 ### Single-repo schema
 
@@ -88,7 +88,7 @@ Optional JSON file at the repo root. When absent, the CLI uses defaults (current
   "postCreateCommands": ["pnpm install"],
   "claude": {
     "command": "claude",
-    "extraArgs": ["--permission-mode", "bypassPermissions"]
+    "extraArgs": ["--permission-mode", "auto"]
   }
 }
 ```
@@ -137,7 +137,7 @@ Wrapping the whole process in a hand-rolled `sandbox-exec` profile kept fighting
 - `sandbox.filesystem.allowWrite`: the gitdirs and each `shareReadWrite` source (canonicalized), since those live outside the worktree. The worktree itself and the session temp dir are writable by default; `shareReadOnly` needs nothing because the native default read policy is broad.
 - Network: native default — no domains pre-allowed; Claude Code prompts once per new domain.
 - `--no-sandbox` writes `sandbox.enabled: false` — settings.local.json persists across launches, so an explicit false must overwrite what a sandboxed run wrote.
-- Scope caveat: the native sandbox confines *Bash commands*; the Read/Edit/Write file tools go through the permission system instead (unrestricted under `bypassPermissions`). The worktree-pinning system prompt (below) is what keeps the file tools inside the worktree.
+- Scope caveat: the native sandbox confines *Bash commands*; the Read/Edit/Write file tools go through the permission system instead (auto-approved by the classifier under the default `auto` mode, unrestricted under `bypassPermissions`). The worktree-pinning system prompt (below) is what keeps the file tools inside the worktree.
 
 Pass `--no-sandbox` to skip sandboxing entirely on either platform.
 

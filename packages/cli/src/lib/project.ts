@@ -45,7 +45,7 @@ const DEFAULT_SANDBOX: SandboxConfig = {
 
 const DEFAULT_CLAUDE: ClaudeConfig = {
   command: 'claude',
-  extraArgs: ['--permission-mode', 'bypassPermissions'],
+  extraArgs: ['--permission-mode', 'auto'],
 };
 
 function defaultConfig(repoRoot: string): GroveConfig {
