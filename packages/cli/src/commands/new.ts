@@ -17,7 +17,7 @@ import { ensureSharedLinks } from '../lib/shared.js';
 import { runPostCreateCommands } from '../lib/post-create.js';
 import { buildSandbox, resolveWorktreeGitDir } from '../lib/sandbox.js';
 import { buildClaudeArgv } from '../lib/claude.js';
-import { ensureStatusLine, mergeLocalSettings } from '../lib/claude-settings.js';
+import { ensureStatusLine, mergeLocalSettings, seedLocalSettings } from '../lib/claude-settings.js';
 import { workspaceStatusLineText, singleStatusLineText } from '../lib/status-line.js';
 import { execInteractive } from '../lib/exec.js';
 import { splitPassthrough } from '../lib/argv.js';
@@ -148,6 +148,7 @@ async function runNewSingle(
   reportAddMode(slug.full, added.mode, baseBranch, fromOverride);
 
   try {
+    if (project.config.claude.inheritLocalSettings) seedSettings(project.repoRoot, worktreePath);
     setupShared(project.repoRoot, worktreePath, project.config.sandbox);
     if (project.config.postCreateCommands.length > 0) {
       runPostCreateCommands({ worktreePath, commands: project.config.postCreateCommands });
@@ -243,6 +244,7 @@ async function runNewWorkspace(
   }
 
   try {
+    if (config.claude.inheritLocalSettings) seedSettings(workspaceRoot, worktreePath);
     setupShared(workspaceRoot, worktreePath, config.sandbox);
     if (config.postCreateCommands.length > 0) {
       runPostCreateCommands({ worktreePath, commands: config.postCreateCommands });
@@ -316,6 +318,12 @@ function reportAddMode(
     process.stderr.write(
       `\x1b[33m[grove]\x1b[0m --from ${fromOverride} ignored; ${label} already exists\n`,
     );
+  }
+}
+
+function seedSettings(rootDir: string, worktreePath: string): void {
+  if (seedLocalSettings(rootDir, worktreePath)) {
+    process.stderr.write(`\x1b[36m[grove]\x1b[0m copied .claude/settings.local.json\n`);
   }
 }
 

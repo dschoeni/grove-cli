@@ -46,6 +46,7 @@ const DEFAULT_SANDBOX: SandboxConfig = {
 const DEFAULT_CLAUDE: ClaudeConfig = {
   command: 'claude',
   extraArgs: ['--permission-mode', 'auto'],
+  inheritLocalSettings: true,
 };
 
 function defaultConfig(repoRoot: string): GroveConfig {
@@ -190,6 +191,7 @@ function applyClaude(obj: Record<string, unknown>, claude: ClaudeConfig): void {
     const c = claudeRaw as Record<string, unknown>;
     if (typeof c.command === 'string' && c.command.trim()) claude.command = c.command.trim();
     if (Array.isArray(c.extraArgs)) claude.extraArgs = c.extraArgs.filter(isString);
+    if (typeof c.inheritLocalSettings === 'boolean') claude.inheritLocalSettings = c.inheritLocalSettings;
   }
 }
 

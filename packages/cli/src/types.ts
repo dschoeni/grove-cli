@@ -11,6 +11,8 @@ export interface SandboxConfig {
 export interface ClaudeConfig {
   command: string;
   extraArgs: string[];
+  /** Seed a new worktree's `.claude/settings.local.json` from the root's copy. */
+  inheritLocalSettings: boolean;
 }
 
 export interface GroveConfig {

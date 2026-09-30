@@ -34,6 +34,25 @@ export function mergeLocalSettings(worktreeDir: string, patch: Record<string, un
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
 }
 
+/**
+ * Copy `<rootDir>/.claude/settings.local.json` into a freshly created worktree
+ * so local-only settings (permission allowlists, env, …) carry over. A one-time
+ * snapshot: later edits on either side stay independent. Skipped when the root
+ * has no such file or the worktree already has one. Returns true if copied.
+ *
+ * Must run before `ensureSharedLinks`, so a real file occupies the path and a
+ * share entry for it is skipped — otherwise grove's own settings writes would
+ * follow the symlink chain into the root's file.
+ */
+export function seedLocalSettings(rootDir: string, worktreeDir: string): boolean {
+  const src = path.join(rootDir, '.claude', 'settings.local.json');
+  const dest = path.join(worktreeDir, '.claude', 'settings.local.json');
+  if (!fs.existsSync(src) || fs.existsSync(dest)) return false;
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.copyFileSync(src, dest);
+  return true;
+}
+
 /** Ensure the settings file has a statusLine command that prints `text`. */
 export function ensureStatusLine(worktreeDir: string, text: string): void {
   mergeLocalSettings(worktreeDir, {

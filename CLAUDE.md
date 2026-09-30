@@ -93,6 +93,8 @@ Optional JSON file at the repo root. When absent, the CLI uses defaults (current
 }
 ```
 
+`claude.inheritLocalSettings` (default `true`): on `grove new`, copy `<root>/.claude/settings.local.json` into the fresh worktree (`seedLocalSettings`, `lib/claude-settings.ts`) before shared links and grove's own settings patch are applied. It's a one-time snapshot: nothing is copied when the worktree already has the file, and later edits on either side stay independent. Because it runs before `ensureSharedLinks`, a share entry for that path gets skipped, so grove's writes never follow a symlink into the root's file.
+
 ### Workspace schema
 
 For multi-repo workspaces, set `type: "workspace"` and list `repos`. Every `grove new <slug>` then creates one worktree per repo under `<workspace>/.grove/<type>/<name>/<repo.path>`.
