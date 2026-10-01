@@ -1,0 +1,23 @@
+[package]
+name = "grove"
+version = "0.1.0"
+edition = "2024"
+description = "Git worktree + sandbox harness for Claude Code"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "grove"
+path = "src/main.rs"
+
+[dependencies]
+# preserve_order keeps .claude/settings.local.json keys in the order they were
+# written, matching what the previous Node implementation produced.
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
