@@ -1,7 +1,8 @@
 name: Release
 
-# Push a tag like v0.2.0 to build static binaries for every target and attach
-# them to a GitHub release.
+# Bump `version` in Cargo.toml, then push the matching tag (version 0.2.0 →
+# tag v0.2.0) to build static binaries for every target and attach them to a
+# GitHub release. A tag that doesn't match Cargo.toml fails before building.
 on:
   push:
     tags: ['v*']
@@ -10,7 +11,20 @@ permissions:
   contents: write
 
 jobs:
+  verify-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tag matches Cargo.toml version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $version (expected v$version)"
+            exit 1
+          fi
+
   build:
+    needs: verify-version
     strategy:
       fail-fast: false
       matrix:
@@ -22,7 +36,7 @@ jobs:
           - { target: x86_64-pc-windows-msvc, os: windows-latest }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -39,7 +53,7 @@ jobs:
           else
             tar czf "$name.tar.gz" "$name" && echo "ASSET=$name.tar.gz" >> "$GITHUB_ENV"
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
           path: ${{ env.ASSET }}
@@ -48,7 +62,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true

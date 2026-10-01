@@ -62,7 +62,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 
 `cargo fmt`, `cargo clippy --all-targets -- -D warnings` and `cargo test` must stay clean (CI enforces all three). Unit tests live next to the code in `#[cfg(test)]` modules and cover the pure logic (paths, arg parsing, slug validation, porcelain parsing, settings merge, Claude argv). Process-level behavior (git, bwrap, exec) has no automated tests; exercise it against throwaway repos with a stub `claude.command` and `GROVE_BWRAP_PATH` pointing at a script that prints its argv.
 
-Pushing a `v*` tag runs `release.yml`, which builds Linux x86_64/aarch64 (musl, static), macOS x86_64/arm64 and Windows x86_64 and publishes them with `SHA256SUMS`.
+To release, bump `version` in `Cargo.toml` and push the matching tag (`0.2.0` → `v0.2.0`; a mismatched tag fails the workflow before building). The tag runs `release.yml`, which builds Linux x86_64/aarch64 (musl, static), macOS x86_64/arm64 and Windows x86_64 and publishes them with `SHA256SUMS`.
 
 ## Commands
 
