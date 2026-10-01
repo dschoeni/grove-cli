@@ -1,10 +1,7 @@
 node_modules
-.pnpm-store
-dist
 .env
 *.local
 data/
 .DS_Store
-*.tsbuildinfo
 .claude/
 /target

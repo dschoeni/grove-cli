@@ -1,6 +1,6 @@
 # Grove
 
-A small CLI that creates a git worktree, runs your setup, and launches Claude Code inside a sandbox — `bwrap` on Linux, Claude Code's built-in sandbox on macOS. Local-only, no daemon, zero runtime dependencies.
+A small CLI that creates a git worktree, runs your setup, and launches Claude Code inside a sandbox — `bwrap` on Linux, Claude Code's built-in sandbox on macOS. Local-only, no daemon, one self-contained binary with no runtime dependencies.
 
 ```bash
 grove new feat/auth-flow
@@ -10,12 +10,12 @@ grove new feat/auth-flow
 
 ## Install
 
-Requires Node ≥ 20 and `pnpm`. On Linux, `bwrap` is needed for sandboxing (apt: `bubblewrap`); on macOS nothing extra is needed. Use `--no-sandbox` if you don't want sandboxing.
+Download the archive for your platform from the [releases page](../../releases), unpack it, and put `grove` on your `PATH`. Linux builds are fully static; there is nothing else to install. On Linux, `bwrap` is needed for sandboxing (apt: `bubblewrap`); on macOS nothing extra is needed. Use `--no-sandbox` if you don't want sandboxing. Windows builds run with `--no-sandbox` only.
+
+Or build from source with a Rust toolchain:
 
 ```bash
-pnpm install
-pnpm -C packages/cli build
-ln -s "$PWD/packages/cli/bin/grove" ~/.local/bin/grove
+cargo install --path .
 ```
 
 Optional shell completion:
@@ -35,6 +35,7 @@ grove resume <slug> [flags]      # re-enter and `claude --continue`
 grove sync <slug> [flags]        # update the worktree branch(es) from their remote
 grove ls                         # list Grove-managed worktrees
 grove rm <slug> [--force]        # remove worktree + branch
+grove pull [branch]              # fast-forward the base branch from its remote
 grove completion <bash|zsh>      # print a completion script
 ```
 
