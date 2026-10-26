@@ -35,6 +35,7 @@ grove resume <slug> [flags]      # re-enter and `claude --continue`
 grove sync <slug> [flags]        # update the worktree branch(es) from their remote
 grove ls                         # list Grove-managed worktrees
 grove rm <slug> [--force]        # remove worktree + branch
+grove repair [slug] [flags]      # re-sync worktrees with .groverc (add new repos, re-link shares)
 grove pull [branch]              # fast-forward the base branch from its remote
 grove completion <bash|zsh>      # print a completion script
 ```
@@ -91,7 +92,9 @@ Optional JSON file at the repo root. With no file present, defaults are: current
 
 ### Workspace (multi-repo)
 
-Set `type: "workspace"` and list `repos`. Each `grove new <slug>` then creates one worktree per repo at `<workspace>/.grove/<type>/<name>/<repo.path>`. Run `grove new` / `grove rm` from the workspace root.
+Set `type: "workspace"` and list `repos`. Each `grove new <slug>` then creates one worktree per repo at `<workspace>/.grove/<type>/<name>/<repo.path>`. Run `grove new` / `grove rm` / `grove repair` from the workspace root.
+
+**Adding a repo later.** Worktrees created before a repo was added to `repos` don't have a checkout of it. Run `grove repair` (all worktrees) or `grove repair <slug>` to add the missing ones; each gets the slug's branch via the same reuse / adopt / create rules as `grove new` (`--from`, `--fetch` and `--dry-run` work the same way). Repair also re-links shared entries, so it picks up new `shareReadOnly`/`shareReadWrite` entries too. It never removes anything and doesn't re-run `postCreateCommands`.
 
 ```jsonc
 {

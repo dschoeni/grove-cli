@@ -260,20 +260,7 @@ pub fn add_workspace_worktree(
     let mut created: Vec<WorkspaceRepoAddResult> = Vec::new();
     let mut add_all = || -> Result<()> {
         for repo in repos {
-            let abs = repo_abs_path(workspace_root, repo);
-            prune_worktrees(&abs);
-            let target = repo_worktree_path(workspace_root, slug, repo);
-            let base = base_branch_override.or(repo.base_branch.as_deref());
-            let plan = plan_branch(&abs, slug, &target, base).map_err(|e| match e {
-                Error::Grove(m) => Error::Grove(format!("repo \"{}\" ({}): {m}", repo.name, repo.path)),
-                other => other,
-            })?;
-            worktree_add(&abs, &target, &plan)?;
-            created.push(WorkspaceRepoAddResult {
-                repo: repo.clone(),
-                created_branch: plan.created_branch,
-                mode: plan.mode,
-            });
+            created.push(add_repo_worktree(workspace_root, slug, repo, base_branch_override)?);
         }
         Ok(())
     };
@@ -283,6 +270,26 @@ pub fn add_workspace_worktree(
         return Err(err);
     }
     Ok(AddWorkspaceWorktreeResult { workspace_dir, per_repo: created })
+}
+
+/// Add one repo's worktree under an existing (or new) workspace worktree dir,
+/// reusing / adopting / creating its branch exactly like `grove new` does.
+pub fn add_repo_worktree(
+    workspace_root: &Path,
+    slug: &ParsedSlug,
+    repo: &WorkspaceRepo,
+    base_branch_override: Option<&str>,
+) -> Result<WorkspaceRepoAddResult> {
+    let abs = repo_abs_path(workspace_root, repo);
+    prune_worktrees(&abs);
+    let target = repo_worktree_path(workspace_root, slug, repo);
+    let base = base_branch_override.or(repo.base_branch.as_deref());
+    let plan = plan_branch(&abs, slug, &target, base).map_err(|e| match e {
+        Error::Grove(m) => Error::Grove(format!("repo \"{}\" ({}): {m}", repo.name, repo.path)),
+        other => other,
+    })?;
+    worktree_add(&abs, &target, &plan)?;
+    Ok(WorkspaceRepoAddResult { repo: repo.clone(), created_branch: plan.created_branch, mode: plan.mode })
 }
 
 pub fn rollback_workspace_worktree(workspace_root: &Path, slug: &ParsedSlug, results: &[WorkspaceRepoAddResult]) {

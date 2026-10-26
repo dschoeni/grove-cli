@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use crate::args::{self, HELP, flag, value};
 use crate::claude_settings::{ensure_status_line, seed_local_settings};
 use crate::commands::{
-    Launch, collect_single_git_dirs, effective_sandbox, launch_claude, link_shared, require_cwd_at_workspace_root,
+    Launch, collect_single_git_dirs, effective_sandbox, launch_claude, link_shared, report_add_mode,
+    require_cwd_at_workspace_root,
 };
 use crate::error::{Result, bail};
 use crate::git::{default_remote, fetch_remote};
@@ -15,7 +16,7 @@ use crate::status_line::{single_status_line_text, workspace_status_line_text};
 use crate::term::{self, stdout};
 use crate::types::{ClaudeConfig, Project, SandboxConfig, SingleProject, WorkspaceProject, WorkspaceRepo};
 use crate::worktree::{
-    AddMode, ParsedSlug, add_workspace_worktree, add_worktree, parse_slug, repo_abs_path, rollback_workspace_worktree,
+    ParsedSlug, add_workspace_worktree, add_worktree, parse_slug, repo_abs_path, rollback_workspace_worktree,
     rollback_worktree, workspace_worktree_dir,
 };
 
@@ -226,22 +227,6 @@ fn handle_setup_failure(keep_on_failure: bool, worktree_path: &Path, rollback: i
     } else {
         term::fail("setup failed, rolling back...");
         rollback();
-    }
-}
-
-fn report_add_mode(label: &str, mode: AddMode, base: Option<&str>, from_override: Option<&str>) {
-    match mode {
-        AddMode::Reuse => term::info(format_args!("reusing existing branch {label}")),
-        AddMode::Adopt => term::info(format_args!("adopting remote branch for {label} (tracking origin)")),
-        AddMode::Create => match base {
-            Some(b) => term::info(format_args!("branched {label} from {b}")),
-            None => term::info(format_args!("branched {label}")),
-        },
-    }
-    if mode != AddMode::Create
-        && let Some(from) = from_override
-    {
-        term::warn(format_args!("--from {from} ignored; {label} already exists"));
     }
 }
 

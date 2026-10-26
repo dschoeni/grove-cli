@@ -28,6 +28,7 @@ src/
 │   ├── sync.rs                   # fetch + fast-forward / --hard reset the worktree branch(es)
 │   ├── ls.rs                     # list Grove-managed worktrees
 │   ├── rm.rs                     # remove worktree + branch
+│   ├── repair.rs                 # add missing workspace repos, re-link shares
 │   ├── pull.rs                   # fast-forward the base branch
 │   ├── completion.rs             # bash/zsh completion script
 │   └── complete_slugs.rs         # hidden helper for tab-completion
@@ -74,12 +75,13 @@ To release, bump `version` in `Cargo.toml` and push the matching tag (`0.2.0` �
 | `grove sync <slug> [--hard]` | Fetch and reconcile the worktree branch(es) with their remote: fast-forward when possible, `--hard` to reset after a force-push. Workspace mode syncs every repo. |
 | `grove ls` | List Grove-managed worktrees in the current project. |
 | `grove rm <slug> [--force]` | Remove the worktree and delete the branch. |
+| `grove repair [slug]` | Bring existing worktrees back in line with `.groverc`: in workspace mode, add a worktree for every configured repo a worktree is missing (e.g. a repo added after `grove new`), using the same reuse/adopt/create branch logic as `new`. In both modes, re-link shared entries, ensure `/.grove/` is excluded, and prune stale registrations. Never removes anything and does not re-run `postCreateCommands`. Without a slug, repairs every worktree. |
 | `grove pull [branch] [--remote <name>]` | Fast-forward the base branch (`.groverc` `baseBranch`, or per-repo in workspace mode) to its latest remote state. Fast-forward only; updates in place when checked out, else advances the ref directly. |
 | `grove completion <bash\|zsh>` | Print a completion script. |
 
-Flags: `grove new` accepts `--from <branch>`, `--fetch`, `--no-sandbox`, `--keep-on-failure`, `--dry-run`, and `-- <args>` to forward to `claude`. `grove sync` accepts `--hard`, `--remote <name>`, `--dry-run`. Run `grove <cmd> --help` for the per-command flags.
+Flags: `grove new` accepts `--from <branch>`, `--fetch`, `--no-sandbox`, `--keep-on-failure`, `--dry-run`, and `-- <args>` to forward to `claude`. `grove sync` accepts `--hard`, `--remote <name>`, `--dry-run`. `grove repair` accepts `--from <branch>`, `--fetch`, `--dry-run`. Run `grove <cmd> --help` for the per-command flags.
 
-Branch resolution lives in `plan_branch` (`src/worktree.rs`) and is shared by single-repo and workspace `new`. It tracks whether grove *created* the branch so rollback only deletes branches grove made — never a pre-existing branch it merely reused.
+Branch resolution lives in `plan_branch` (`src/worktree.rs`) and is shared by single-repo and workspace `new` and by `repair` (via `add_repo_worktree`). It tracks whether grove *created* the branch so rollback only deletes branches grove made — never a pre-existing branch it merely reused.
 
 ## `.groverc`
 
@@ -122,7 +124,7 @@ For multi-repo workspaces, set `type: "workspace"` and list `repos`. Every `grov
 }
 ```
 
-`grove new` and `grove rm` in workspace mode must be run from the workspace root.
+`grove new`, `grove rm` and `grove repair` in workspace mode must be run from the workspace root. After adding a repo to `repos`, run `grove repair` to give existing worktrees a checkout of it.
 
 ## Shared entries
 

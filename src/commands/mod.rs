@@ -4,6 +4,7 @@ pub mod init;
 pub mod ls;
 pub mod new;
 pub mod pull;
+pub mod repair;
 pub mod resume;
 pub mod rm;
 pub mod sync;
@@ -17,7 +18,9 @@ use crate::exec::exec_interactive;
 use crate::paths;
 use crate::sandbox::{BuildSandboxInput, build_sandbox, resolve_worktree_git_dir};
 use crate::shared::{EnsureSharedLinksResult, SharedInput, ensure_shared_links};
+use crate::term;
 use crate::types::{ClaudeConfig, SandboxConfig};
+use crate::worktree::AddMode;
 
 /// Workspace-mode commands that touch every repo must run from the workspace root.
 pub fn require_cwd_at_workspace_root(workspace_root: &Path) -> Result<()> {
@@ -48,6 +51,23 @@ pub fn link_shared(root_dir: &Path, worktree_path: &Path, sandbox: &SandboxConfi
 /// A config's sandbox settings with `--no-sandbox` applied.
 pub fn effective_sandbox(config: &SandboxConfig, no_sandbox: bool) -> SandboxConfig {
     SandboxConfig { enabled: config.enabled && !no_sandbox, ..config.clone() }
+}
+
+/// Tell the user whether a branch was reused, adopted from the remote, or freshly cut.
+pub fn report_add_mode(label: &str, mode: AddMode, base: Option<&str>, from_override: Option<&str>) {
+    match mode {
+        AddMode::Reuse => term::info(format_args!("reusing existing branch {label}")),
+        AddMode::Adopt => term::info(format_args!("adopting remote branch for {label} (tracking origin)")),
+        AddMode::Create => match base {
+            Some(b) => term::info(format_args!("branched {label} from {b}")),
+            None => term::info(format_args!("branched {label}")),
+        },
+    }
+    if mode != AddMode::Create
+        && let Some(from) = from_override
+    {
+        term::warn(format_args!("--from {from} ignored; {label} already exists"));
+    }
 }
 
 /// Everything needed to start Claude in a prepared worktree.
