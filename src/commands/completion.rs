@@ -6,12 +6,12 @@ const BASH: &str = r#"_grove() {
   cmd="${COMP_WORDS[1]:-}"
 
   if [[ $COMP_CWORD -eq 1 ]]; then
-    COMPREPLY=( $(compgen -W "init new resume sync ls rm pull completion" -- "$cur") )
+    COMPREPLY=( $(compgen -W "init new resume sync ls rm repair pull completion" -- "$cur") )
     return
   fi
 
   case "$cmd" in
-    resume|sync|rm)
+    resume|sync|rm|repair)
       if [[ $COMP_CWORD -eq 2 ]]; then
         local slugs
         slugs="$(grove __complete-slugs 2>/dev/null)"
@@ -39,6 +39,7 @@ _grove() {
     'sync:Update worktree branches from their remote'
     'ls:List Grove-managed worktrees'
     'rm:Remove a worktree and its branch'
+    'repair:Bring worktrees back in line with .groverc'
     'pull:Fast-forward the base branch to its latest remote state'
     'completion:Output a shell completion script'
   )
@@ -49,7 +50,7 @@ _grove() {
   fi
 
   case "$words[2]" in
-    resume|sync|rm)
+    resume|sync|rm|repair)
       if (( CURRENT == 3 )); then
         local -a slugs
         slugs=("${(@f)$(grove __complete-slugs 2>/dev/null)}")

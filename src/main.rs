@@ -33,6 +33,7 @@ Commands:
   sync <slug>          Update a worktree's branch(es) from their remote.
   ls                   List Grove-managed worktrees.
   rm <slug>            Remove a worktree and its branch.
+  repair [slug]        Re-sync worktrees with .groverc (e.g. add newly listed repos).
   pull [branch]        Fast-forward the base branch to its latest remote state.
   completion <shell>   Output a bash or zsh completion script.
 
@@ -60,6 +61,7 @@ fn run(argv: &[String]) -> Result<i32> {
         "sync" => commands::sync::run(rest),
         "ls" => commands::ls::run(rest),
         "rm" => commands::rm::run(rest),
+        "repair" => commands::repair::run(rest),
         "pull" => commands::pull::run(rest),
         "completion" => Ok(commands::completion::run(rest)),
         "__complete-slugs" => {
