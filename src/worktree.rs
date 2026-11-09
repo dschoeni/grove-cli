@@ -84,7 +84,7 @@ pub fn list_grove_worktrees(repo_root: &Path, layout: &Layout) -> Result<Vec<Wor
 
 /// Remove now-empty dirs from `path`'s parent up to and including its grove
 /// dir, so `rm` leaves no empty `<type>/` (or per-project) dirs behind.
-fn prune_empty_parents(layout: &Layout, path: &Path) {
+pub fn prune_empty_parents(layout: &Layout, path: &Path) {
     let Some(stop) = containing_dir(layout, path) else {
         return;
     };

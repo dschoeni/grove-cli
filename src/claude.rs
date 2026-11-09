@@ -78,15 +78,20 @@ fn worktree_system_prompt(ctx: &WorktreeContext) -> String {
 /// `<config>/projects/`, named after the cwd with every non-alphanumeric
 /// character replaced by a dash.
 pub fn has_claude_session(cwd: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(claude_project_dir(cwd)) else {
+        return false;
+    };
+    entries.flatten().any(|e| e.file_name().to_string_lossy().ends_with(".jsonl"))
+}
+
+/// Where Claude keeps transcripts for sessions started in `cwd`. Resolve it
+/// while `cwd` still exists: the realpath step needs the directory.
+pub fn claude_project_dir(cwd: &Path) -> PathBuf {
     let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| paths::home_dir().join(".claude"));
-    let project_dir = config_dir.join("projects").join(encode_project_dir(cwd));
-    let Ok(entries) = fs::read_dir(project_dir) else {
-        return false;
-    };
-    entries.flatten().any(|e| e.file_name().to_string_lossy().ends_with(".jsonl"))
+    config_dir.join("projects").join(encode_project_dir(cwd))
 }
 
 /// Mirrors Claude's own cwd → project-dir mapping: realpath, then dash out

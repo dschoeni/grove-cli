@@ -29,6 +29,7 @@ src/
 │   ├── ls.rs                     # list Grove-managed worktrees
 │   ├── rm.rs                     # remove worktree + branch
 │   ├── repair.rs                 # add missing workspace repos, re-link shares
+│   ├── migrate.rs                # move legacy <root>/.grove worktrees to worktreeRoot
 │   ├── pull.rs                   # fast-forward the base branch
 │   ├── completion.rs             # bash/zsh completion script
 │   └── complete_slugs.rs         # hidden helper for tab-completion
@@ -76,6 +77,7 @@ To release, bump `version` in `Cargo.toml` and push the matching tag (`0.2.0` �
 | `grove ls` | List Grove-managed worktrees in the current project. |
 | `grove rm <slug> [--force]` | Remove the worktree and delete the branch. |
 | `grove repair [slug]` | Bring existing worktrees back in line with `.groverc`: in workspace mode, add a worktree for every configured repo a worktree is missing (e.g. a repo added after `grove new`), using the same reuse/adopt/create branch logic as `new`. In both modes, re-link shared entries, ensure `/.grove/` is excluded, and prune stale registrations. Never removes anything and does not re-run `postCreateCommands`. Without a slug, repairs every worktree. |
+| `grove migrate <slug\|all> [--dry-run]` | Move worktrees still under `<root>/.grove` to the `worktreeRoot` location: rename the dir (`mv` fallback across filesystems), `git worktree repair` in each affected repo, rename Claude's `~/.claude/projects/<encoded cwd>` history dir (`claude_project_dir`, resolved *before* the move since it realpaths), prune emptied legacy dirs. Errors if `worktreeRoot` is unset or the target exists. |
 | `grove pull [branch] [--remote <name>]` | Fast-forward the base branch (`.groverc` `baseBranch`, or per-repo in workspace mode) to its latest remote state. Fast-forward only; updates in place when checked out, else advances the ref directly. |
 | `grove completion <bash\|zsh>` | Print a completion script. |
 
@@ -130,7 +132,7 @@ For multi-repo workspaces, set `type: "workspace"` and list `repos`. Every `grov
 
 ## Worktree location (`worktreeRoot`)
 
-`.groverc` `worktreeRoot` (or `$GROVE_WORKTREE_ROOT` when unset) moves a project's grove dir, the `<type>/<name>` tree, out of the checkout so that searches over the repo don't crawl every worktree. `resolve_layout` (`src/project.rs`) turns it into a `Layout { dir, legacy }` (`src/types.rs`) stored on `SingleProject`/`WorkspaceProject`: unset/`"repo"` → `<root>/.grove`; `"system"` → `~/.grove/<key>` (`paths::home_dir()`, so `%USERPROFILE%` on Windows); any other string → `<path>/<key>` (`~` expanded, relative to root). `<key>` is `<basename>-<fnv1a32 of canonical root>`. New worktrees go to `layout.dir`; lookups (`find_*`, `list_*`, `slug_of`) also search `legacy` (`<root>/.grove`) so worktrees made before the switch keep working. Functions in `src/worktree.rs` take the `Layout` and, for `rm`/rollback/repair, the worktree's actual path, never a recomputed one. `rm` prunes empty parents up to and including the grove dir. `/.grove/` stays in `.git/info/exclude` because each worktree still has its own `.grove/shared`.
+`.groverc` `worktreeRoot` (or `$GROVE_WORKTREE_ROOT` when unset) moves a project's grove dir, the `<type>/<name>` tree, out of the checkout so that searches over the repo don't crawl every worktree. `resolve_layout` (`src/project.rs`) turns it into a `Layout { dir, legacy }` (`src/types.rs`) stored on `SingleProject`/`WorkspaceProject`: unset/`"repo"` → `<root>/.grove`; `"system"` → `~/.grove/<key>` (`paths::home_dir()`, so `%USERPROFILE%` on Windows); any other string → `<path>/<key>` (`~` expanded, relative to root). `<key>` is `<basename>-<fnv1a32 of canonical root>`. New worktrees go to `layout.dir`; lookups (`find_*`, `list_*`, `slug_of`) also search `legacy` (`<root>/.grove`) so worktrees made before the switch keep working, and `grove migrate` moves them over. Functions in `src/worktree.rs` take the `Layout` and, for `rm`/rollback/repair, the worktree's actual path, never a recomputed one. `rm` prunes empty parents up to and including the grove dir. `/.grove/` stays in `.git/info/exclude` because each worktree still has its own `.grove/shared`.
 
 ## Shared entries
 
