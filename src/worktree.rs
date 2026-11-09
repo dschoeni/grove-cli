@@ -9,7 +9,7 @@ use crate::git::{
     remote_branch_exists, rev_exists,
 };
 use crate::paths;
-use crate::types::{BRANCH_TYPES, WorkspaceRepo};
+use crate::types::{BRANCH_TYPES, Layout, WorkspaceRepo};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParsedSlug {
@@ -50,22 +50,51 @@ fn valid_slug_name(name: &str) -> bool {
     first_ok && rest_ok && !forbidden
 }
 
-pub fn worktree_path_for(repo_root: &Path, slug: &ParsedSlug) -> PathBuf {
-    paths::join(&repo_root.join(".grove").join(slug.kind), &slug.name)
+/// `<grove_dir>/<type>/<name>`.
+pub fn worktree_path_for(grove_dir: &Path, slug: &ParsedSlug) -> PathBuf {
+    paths::join(&grove_dir.join(slug.kind), &slug.name)
 }
 
-pub fn is_grove_worktree(repo_root: &Path, worktree_path: &Path) -> bool {
-    let prefix = format!("{}{}", repo_root.join(".grove").display(), std::path::MAIN_SEPARATOR);
-    worktree_path.to_string_lossy().starts_with(&prefix)
+/// The grove dir of `layout` that `worktree_path` lives under, if any.
+fn containing_dir<'a>(layout: &'a Layout, worktree_path: &Path) -> Option<&'a Path> {
+    layout.dirs().find(|dir| {
+        let prefix = format!("{}{}", dir.display(), std::path::MAIN_SEPARATOR);
+        worktree_path.to_string_lossy().starts_with(&prefix)
+    })
 }
 
-pub fn find_grove_worktree(repo_root: &Path, slug: &ParsedSlug) -> Result<Option<WorktreePorcelain>> {
-    let target = worktree_path_for(repo_root, slug);
-    Ok(list_worktrees(repo_root)?.into_iter().find(|w| w.path == target))
+pub fn is_grove_worktree(layout: &Layout, worktree_path: &Path) -> bool {
+    containing_dir(layout, worktree_path).is_some()
 }
 
-pub fn list_grove_worktrees(repo_root: &Path) -> Result<Vec<WorktreePorcelain>> {
-    Ok(list_worktrees(repo_root)?.into_iter().filter(|w| is_grove_worktree(repo_root, &w.path)).collect())
+/// The `<type>/<name>` slug of a grove worktree path.
+pub fn slug_of(layout: &Layout, worktree_path: &Path) -> String {
+    let dir = containing_dir(layout, worktree_path).unwrap_or(&layout.dir);
+    paths::relative(dir, worktree_path).display().to_string()
+}
+
+pub fn find_grove_worktree(repo_root: &Path, layout: &Layout, slug: &ParsedSlug) -> Result<Option<WorktreePorcelain>> {
+    let worktrees = list_worktrees(repo_root)?;
+    Ok(layout.dirs().map(|d| worktree_path_for(d, slug)).find_map(|t| worktrees.iter().find(|w| w.path == t).cloned()))
+}
+
+pub fn list_grove_worktrees(repo_root: &Path, layout: &Layout) -> Result<Vec<WorktreePorcelain>> {
+    Ok(list_worktrees(repo_root)?.into_iter().filter(|w| is_grove_worktree(layout, &w.path)).collect())
+}
+
+/// Remove now-empty dirs from `path`'s parent up to and including its grove
+/// dir, so `rm` leaves no empty `<type>/` (or per-project) dirs behind.
+pub fn prune_empty_parents(layout: &Layout, path: &Path) {
+    let Some(stop) = containing_dir(layout, path) else {
+        return;
+    };
+    let mut dir = path.parent();
+    while let Some(d) = dir {
+        if !d.starts_with(stop) || !paths::is_empty_dir(d) || fs::remove_dir(d).is_err() {
+            break;
+        }
+        dir = d.parent();
+    }
 }
 
 /// How `grove new` obtained the branch for a worktree.
@@ -154,11 +183,16 @@ pub struct AddWorktreeResult {
     pub mode: AddMode,
 }
 
-pub fn add_worktree(repo_root: &Path, slug: &ParsedSlug, base_branch: Option<&str>) -> Result<AddWorktreeResult> {
+pub fn add_worktree(
+    repo_root: &Path,
+    layout: &Layout,
+    slug: &ParsedSlug,
+    base_branch: Option<&str>,
+) -> Result<AddWorktreeResult> {
     prune_worktrees(repo_root);
 
-    let worktree_path = worktree_path_for(repo_root, slug);
-    if let Some(existing) = find_grove_worktree(repo_root, slug)? {
+    let worktree_path = worktree_path_for(&layout.dir, slug);
+    if let Some(existing) = find_grove_worktree(repo_root, layout, slug)? {
         bail!(
             "A worktree for \"{0}\" already exists at {1}. \
              Use `grove resume {0}` to re-enter it, or `grove rm {0}` to remove it.",
@@ -180,43 +214,48 @@ pub fn add_worktree(repo_root: &Path, slug: &ParsedSlug, base_branch: Option<&st
 }
 
 /// Remove the worktree and, when `delete_branch`, its branch (`-D`, so unmerged
-/// work goes too). Prunes the now-empty `.grove/<type>/` dir.
-pub fn remove_worktree(repo_root: &Path, slug: &ParsedSlug, force: bool, delete_branch: bool) -> Result<()> {
-    let worktree_path = worktree_path_for(repo_root, slug);
+/// work goes too). Prunes the now-empty `<type>/` dir.
+pub fn remove_worktree(
+    repo_root: &Path,
+    layout: &Layout,
+    worktree_path: &Path,
+    slug: &ParsedSlug,
+    force: bool,
+    delete_branch: bool,
+) -> Result<()> {
     let mut args: Vec<OsString> = vec!["worktree".into(), "remove".into()];
     if force {
         args.push("--force".into());
     }
-    args.push(worktree_path.clone().into());
+    args.push(worktree_path.into());
     git(&args, repo_root)?;
 
     if delete_branch && branch_exists(repo_root, &slug.full) {
         git(["branch", "-D", &slug.full], repo_root)?;
     }
 
-    if let Some(parent) = worktree_path.parent()
-        && paths::is_empty_dir(parent)
-    {
-        let _ = fs::remove_dir(parent);
-    }
+    prune_empty_parents(layout, worktree_path);
     Ok(())
 }
 
-pub fn rollback_worktree(repo_root: &Path, slug: &ParsedSlug, created_branch: bool) {
+pub fn rollback_worktree(
+    repo_root: &Path,
+    layout: &Layout,
+    worktree_path: &Path,
+    slug: &ParsedSlug,
+    created_branch: bool,
+) {
     // Already gone or never created; nothing to do.
-    let _ = remove_worktree(repo_root, slug, true, created_branch);
+    let _ = remove_worktree(repo_root, layout, worktree_path, slug, true, created_branch);
 }
 
 // ============================================================
 // Workspace helpers
 // ============================================================
 
-pub fn workspace_worktree_dir(workspace_root: &Path, slug: &ParsedSlug) -> PathBuf {
-    worktree_path_for(workspace_root, slug)
-}
-
-pub fn repo_worktree_path(workspace_root: &Path, slug: &ParsedSlug, repo: &WorkspaceRepo) -> PathBuf {
-    paths::join(&workspace_worktree_dir(workspace_root, slug), &repo.path)
+/// `<workspace_dir>/<repo.path>`: one repo's worktree inside a workspace worktree.
+pub fn repo_worktree_path(workspace_dir: &Path, repo: &WorkspaceRepo) -> PathBuf {
+    paths::join(workspace_dir, &repo.path)
 }
 
 pub fn repo_abs_path(workspace_root: &Path, repo: &WorkspaceRepo) -> PathBuf {
@@ -237,36 +276,37 @@ pub struct AddWorkspaceWorktreeResult {
     pub per_repo: Vec<WorkspaceRepoAddResult>,
 }
 
-/// Create one git worktree per repo under `<workspace>/.grove/<slug>/<repo.path>`.
+/// Create one git worktree per repo under `<grove_dir>/<slug>/<repo.path>`.
 /// Each repo independently reuses / adopts / creates its branch, so a branch
 /// that only exists in some repos is fine. Rolls back any partial state if a
 /// repo fails, deleting only branches grove created.
 pub fn add_workspace_worktree(
     workspace_root: &Path,
+    layout: &Layout,
     slug: &ParsedSlug,
     repos: &[WorkspaceRepo],
     base_branch_override: Option<&str>,
 ) -> Result<AddWorkspaceWorktreeResult> {
-    let workspace_dir = workspace_worktree_dir(workspace_root, slug);
-    if workspace_dir.exists() {
+    if let Some(existing) = layout.dirs().map(|d| worktree_path_for(d, slug)).find(|d| d.exists()) {
         bail!(
             "A worktree for \"{0}\" already exists at {1}. \
              Use `grove resume {0}` to re-enter it, or `grove rm {0}` to remove it.",
             slug.full,
-            workspace_dir.display()
+            existing.display()
         );
     }
+    let workspace_dir = worktree_path_for(&layout.dir, slug);
 
     let mut created: Vec<WorkspaceRepoAddResult> = Vec::new();
     let mut add_all = || -> Result<()> {
         for repo in repos {
-            created.push(add_repo_worktree(workspace_root, slug, repo, base_branch_override)?);
+            created.push(add_repo_worktree(workspace_root, &workspace_dir, slug, repo, base_branch_override)?);
         }
         Ok(())
     };
 
     if let Err(err) = add_all() {
-        rollback_workspace_worktree(workspace_root, slug, &created);
+        rollback_workspace_worktree(workspace_root, layout, &workspace_dir, slug, &created);
         return Err(err);
     }
     Ok(AddWorkspaceWorktreeResult { workspace_dir, per_repo: created })
@@ -276,13 +316,14 @@ pub fn add_workspace_worktree(
 /// reusing / adopting / creating its branch exactly like `grove new` does.
 pub fn add_repo_worktree(
     workspace_root: &Path,
+    workspace_dir: &Path,
     slug: &ParsedSlug,
     repo: &WorkspaceRepo,
     base_branch_override: Option<&str>,
 ) -> Result<WorkspaceRepoAddResult> {
     let abs = repo_abs_path(workspace_root, repo);
     prune_worktrees(&abs);
-    let target = repo_worktree_path(workspace_root, slug, repo);
+    let target = repo_worktree_path(workspace_dir, repo);
     let base = base_branch_override.or(repo.base_branch.as_deref());
     let plan = plan_branch(&abs, slug, &target, base).map_err(|e| match e {
         Error::Grove(m) => Error::Grove(format!("repo \"{}\" ({}): {m}", repo.name, repo.path)),
@@ -292,10 +333,16 @@ pub fn add_repo_worktree(
     Ok(WorkspaceRepoAddResult { repo: repo.clone(), created_branch: plan.created_branch, mode: plan.mode })
 }
 
-pub fn rollback_workspace_worktree(workspace_root: &Path, slug: &ParsedSlug, results: &[WorkspaceRepoAddResult]) {
+pub fn rollback_workspace_worktree(
+    workspace_root: &Path,
+    layout: &Layout,
+    workspace_dir: &Path,
+    slug: &ParsedSlug,
+    results: &[WorkspaceRepoAddResult],
+) {
     for r in results {
         let abs = repo_abs_path(workspace_root, &r.repo);
-        let target = repo_worktree_path(workspace_root, slug, &r.repo);
+        let target = repo_worktree_path(workspace_dir, &r.repo);
         let mut args: Vec<OsString> = vec!["worktree".into(), "remove".into(), "--force".into()];
         args.push(target.into());
         let _ = git(&args, &abs);
@@ -304,18 +351,20 @@ pub fn rollback_workspace_worktree(workspace_root: &Path, slug: &ParsedSlug, res
         }
     }
     // Remove the (likely empty) workspace dir tree.
-    let _ = paths::remove_all(&workspace_worktree_dir(workspace_root, slug));
-    cleanup_empty_type_dir(workspace_root, slug);
+    let _ = paths::remove_all(workspace_dir);
+    prune_empty_parents(layout, workspace_dir);
 }
 
 pub fn remove_workspace_worktree(
     workspace_root: &Path,
+    layout: &Layout,
+    workspace_dir: &Path,
     slug: &ParsedSlug,
     repos: &[WorkspaceRepo],
     force: bool,
 ) -> Result<()> {
     for repo in repos {
-        let target = repo_worktree_path(workspace_root, slug, repo);
+        let target = repo_worktree_path(workspace_dir, repo);
         if !target.exists() {
             continue;
         }
@@ -330,17 +379,10 @@ pub fn remove_workspace_worktree(
             git(["branch", "-D", &slug.full], &abs)?;
         }
     }
-    // Whatever's left in <ws>/.grove/<slug>/ is shared-symlinks or empty parent dirs.
-    let _ = paths::remove_all(&workspace_worktree_dir(workspace_root, slug));
-    cleanup_empty_type_dir(workspace_root, slug);
+    // Whatever's left in <grove_dir>/<slug>/ is shared-symlinks or empty parent dirs.
+    let _ = paths::remove_all(workspace_dir);
+    prune_empty_parents(layout, workspace_dir);
     Ok(())
-}
-
-fn cleanup_empty_type_dir(workspace_root: &Path, slug: &ParsedSlug) {
-    let type_dir = workspace_root.join(".grove").join(slug.kind);
-    if paths::is_empty_dir(&type_dir) {
-        let _ = fs::remove_dir(&type_dir);
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -358,9 +400,13 @@ pub struct WorkspaceWorktreeRow {
     pub per_repo: Vec<WorkspaceWorktreeRepoRow>,
 }
 
-pub fn list_workspace_worktrees(workspace_root: &Path, repos: &[WorkspaceRepo]) -> Vec<WorkspaceWorktreeRow> {
-    let grove_dir = workspace_root.join(".grove");
-    if !grove_dir.exists() {
+pub fn list_workspace_worktrees(
+    workspace_root: &Path,
+    layout: &Layout,
+    repos: &[WorkspaceRepo],
+) -> Vec<WorkspaceWorktreeRow> {
+    let grove_dirs: Vec<&Path> = layout.dirs().filter(|d| d.exists()).collect();
+    if grove_dirs.is_empty() {
         return Vec::new();
     }
 
@@ -375,14 +421,19 @@ pub fn list_workspace_worktrees(workspace_root: &Path, repos: &[WorkspaceRepo]) 
         })
         .collect();
 
-    let mut rows = Vec::new();
-    for slug in enumerate_slug_dirs(&grove_dir) {
-        let workspace_dir = paths::join(&grove_dir, &slug);
+    let mut rows: Vec<WorkspaceWorktreeRow> = Vec::new();
+    let slugs = grove_dirs.iter().flat_map(|dir| enumerate_slug_dirs(dir).into_iter().map(move |s| (*dir, s)));
+    for (grove_dir, slug) in slugs {
+        // The primary dir is enumerated first, so it wins over a legacy duplicate.
+        if rows.iter().any(|r| r.slug == slug) {
+            continue;
+        }
+        let workspace_dir = paths::join(grove_dir, &slug);
         let per_repo: Vec<WorkspaceWorktreeRepoRow> = repos
             .iter()
             .zip(&per_repo_index)
             .map(|(repo, index)| {
-                let target = paths::join(&workspace_dir, &repo.path);
+                let target = repo_worktree_path(&workspace_dir, repo);
                 let entry = index.get(&target);
                 WorkspaceWorktreeRepoRow {
                     repo: repo.clone(),
@@ -396,10 +447,11 @@ pub fn list_workspace_worktrees(workspace_root: &Path, repos: &[WorkspaceRepo]) 
             rows.push(WorkspaceWorktreeRow { slug, workspace_dir, per_repo });
         }
     }
+    rows.sort_by(|a, b| a.slug.cmp(&b.slug));
     rows
 }
 
-/// Find immediate `<type>/<name>` directory pairs under `.grove/`.
+/// Find immediate `<type>/<name>` directory pairs under a grove dir.
 fn enumerate_slug_dirs(grove_dir: &Path) -> Vec<String> {
     let mut out = Vec::new();
     let Ok(type_entries) = fs::read_dir(grove_dir) else {
@@ -428,14 +480,14 @@ fn enumerate_slug_dirs(grove_dir: &Path) -> Vec<String> {
 
 pub fn find_workspace_worktree(
     workspace_root: &Path,
+    layout: &Layout,
     repos: &[WorkspaceRepo],
     slug: &ParsedSlug,
 ) -> Option<WorkspaceWorktreeRow> {
-    let dir = workspace_worktree_dir(workspace_root, slug);
-    if !dir.exists() {
+    if !layout.dirs().any(|d| worktree_path_for(d, slug).exists()) {
         return None;
     }
-    list_workspace_worktrees(workspace_root, repos).into_iter().find(|r| r.workspace_dir == dir)
+    list_workspace_worktrees(workspace_root, layout, repos).into_iter().find(|r| r.slug == slug.full)
 }
 
 #[cfg(test)]
@@ -463,9 +515,20 @@ mod tests {
     #[test]
     fn worktree_paths() {
         let s = parse_slug("feat/a/b").unwrap();
-        assert_eq!(worktree_path_for(Path::new("/r"), &s), PathBuf::from("/r/.grove/feat/a/b"));
-        assert!(is_grove_worktree(Path::new("/r"), Path::new("/r/.grove/feat/a")));
-        assert!(!is_grove_worktree(Path::new("/r"), Path::new("/r/.grove")));
-        assert!(!is_grove_worktree(Path::new("/r"), Path::new("/r/.groveish/x")));
+        let local = Layout { dir: PathBuf::from("/r/.grove"), legacy: None };
+        assert_eq!(worktree_path_for(&local.dir, &s), PathBuf::from("/r/.grove/feat/a/b"));
+        assert!(is_grove_worktree(&local, Path::new("/r/.grove/feat/a")));
+        assert!(!is_grove_worktree(&local, Path::new("/r/.grove")));
+        assert!(!is_grove_worktree(&local, Path::new("/r/.groveish/x")));
+    }
+
+    #[test]
+    fn moved_layout_still_sees_legacy_worktrees() {
+        let moved = Layout { dir: PathBuf::from("/home/u/.grove/r-1"), legacy: Some(PathBuf::from("/r/.grove")) };
+        assert!(is_grove_worktree(&moved, Path::new("/home/u/.grove/r-1/feat/x")));
+        assert!(is_grove_worktree(&moved, Path::new("/r/.grove/fix/y")));
+        assert!(!is_grove_worktree(&moved, Path::new("/home/u/.grove/r-2/feat/x")));
+        assert_eq!(slug_of(&moved, Path::new("/home/u/.grove/r-1/feat/x")), "feat/x");
+        assert_eq!(slug_of(&moved, Path::new("/r/.grove/fix/a/b")), "fix/a/b");
     }
 }

@@ -8,8 +8,8 @@ use serde_json::{Map, Value};
 use crate::error::{Result, bail};
 use crate::paths;
 use crate::types::{
-    ClaudeConfig, ConfigSource, GroveConfig, Project, SandboxConfig, SingleProject, WorkspaceConfig, WorkspaceProject,
-    WorkspaceRepo,
+    ClaudeConfig, ConfigSource, GroveConfig, Layout, Project, SandboxConfig, SingleProject, WorkspaceConfig,
+    WorkspaceProject, WorkspaceRepo,
 };
 
 pub fn find_repo_root(start: &Path) -> Result<PathBuf> {
@@ -78,13 +78,23 @@ pub fn load_project_from(start: &Path) -> Result<Project> {
         let Value::Object(obj) = parsed else {
             bail!(".groverc must be a JSON object");
         };
+        let worktree_root = match obj.get("worktreeRoot") {
+            None | Some(Value::Null) => None,
+            Some(v) => match trimmed_str(Some(v)) {
+                Some(s) => Some(s),
+                None => bail!(".groverc \"worktreeRoot\" must be a non-empty string"),
+            },
+        };
         if obj.get("type").and_then(Value::as_str) == Some("workspace") {
             let config = parse_workspace_config(&obj, &ancestor)?;
-            return Ok(Project::Workspace(WorkspaceProject { workspace_root: ancestor, config }));
+            let layout = resolve_layout(&ancestor, worktree_root.as_deref());
+            return Ok(Project::Workspace(WorkspaceProject { workspace_root: ancestor, layout, config }));
         }
+        let repo_root = find_repo_root(&ancestor)?;
         return Ok(Project::Single(SingleProject {
-            repo_root: find_repo_root(&ancestor)?,
+            layout: resolve_layout(&repo_root, worktree_root.as_deref()),
             config: merge_single_config(&obj, &ancestor),
+            repo_root,
             config_source: ConfigSource::Groverc,
         }));
     }
@@ -92,10 +102,55 @@ pub fn load_project_from(start: &Path) -> Result<Project> {
     // No .groverc — fall back to git repo root with defaults.
     let repo_root = find_repo_root(start)?;
     Ok(Project::Single(SingleProject {
+        layout: resolve_layout(&repo_root, None),
         config: default_config(&repo_root),
         repo_root,
         config_source: ConfigSource::Defaults,
     }))
+}
+
+/// Env override for `worktreeRoot`, applied to every project without one in its `.groverc`.
+pub const WORKTREE_ROOT_ENV: &str = "GROVE_WORKTREE_ROOT";
+
+/// Work out where `root`'s grove dir lives. `setting` is the `.groverc`
+/// `worktreeRoot`; when absent, `$GROVE_WORKTREE_ROOT` applies.
+pub fn resolve_layout(root: &Path, setting: Option<&str>) -> Layout {
+    let env = std::env::var(WORKTREE_ROOT_ENV).ok();
+    layout_for(root, setting.or(env.as_deref()), &paths::home_dir())
+}
+
+/// - unset / `"repo"` → `<root>/.grove` (the default)
+/// - `"system"`       → `~/.grove/<project-key>`
+/// - any other path   → `<path>/<project-key>` (`~` expanded, relative to `root`)
+///
+/// The project key keeps projects that share a base dir apart; it always ends
+/// in `-<hash>`, so it can't collide with anything else grove puts in `~/.grove`.
+fn layout_for(root: &Path, setting: Option<&str>, home: &Path) -> Layout {
+    let local = root.join(".grove");
+    let base = match setting.map(str::trim) {
+        None | Some("" | "repo") => return Layout { dir: local, legacy: None },
+        Some("system") => home.join(".grove"),
+        Some(p) => paths::resolve(root, paths::expand_tilde(p)),
+    };
+    let dir = base.join(project_key(root));
+    let legacy = (dir != local).then_some(local);
+    Layout { dir, legacy }
+}
+
+/// `<basename>-<hash>` of the project root: readable, but unique per checkout.
+fn project_key(root: &Path) -> String {
+    let canonical = paths::canonical(root);
+    let name: String = paths::basename(&canonical)
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '_' })
+        .collect();
+    let name = if name.is_empty() { "root".to_string() } else { name };
+    format!("{name}-{:08x}", fnv1a(canonical.to_string_lossy().as_bytes()) as u32)
+}
+
+/// 64-bit FNV-1a: stable across builds and platforms, unlike `DefaultHasher`.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
 }
 
 fn merge_single_config(obj: &Map<String, Value>, repo_root: &Path) -> GroveConfig {
@@ -216,4 +271,39 @@ pub fn ensure_grove_ignored(repo_root: &Path) -> Result<()> {
     let mut f = fs::OpenOptions::new().create(true).append(true).open(&exclude_file)?;
     writeln!(f, "{prefix}{LINE}")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layout_defaults_to_repo_local() {
+        let l = layout_for(Path::new("/nonexistent/r"), None, Path::new("/home/u"));
+        assert_eq!(l, Layout { dir: PathBuf::from("/nonexistent/r/.grove"), legacy: None });
+        assert_eq!(layout_for(Path::new("/nonexistent/r"), Some("repo"), Path::new("/home/u")), l);
+    }
+
+    #[test]
+    fn layout_system_and_custom_paths() {
+        let root = Path::new("/nonexistent/my repo");
+        let key = project_key(root);
+        assert!(key.starts_with("my_repo-") && key.len() == "my_repo-".len() + 8, "{key}");
+
+        let sys = layout_for(root, Some("system"), Path::new("/home/u"));
+        assert_eq!(sys.dir, PathBuf::from(format!("/home/u/.grove/{key}")));
+        assert_eq!(sys.legacy, Some(root.join(".grove")));
+        assert_eq!(sys.dirs().count(), 2);
+
+        let abs = layout_for(root, Some("/wt"), Path::new("/home/u"));
+        assert_eq!(abs.dir, PathBuf::from(format!("/wt/{key}")));
+        let rel = layout_for(root, Some("../wt"), Path::new("/home/u"));
+        assert_eq!(rel.dir, PathBuf::from(format!("/nonexistent/wt/{key}")));
+    }
+
+    #[test]
+    fn project_key_differs_per_root() {
+        assert_ne!(project_key(Path::new("/nonexistent/a/app")), project_key(Path::new("/nonexistent/b/app")));
+        assert_eq!(project_key(Path::new("/nonexistent/a/app")), project_key(Path::new("/nonexistent/a/app")));
+    }
 }

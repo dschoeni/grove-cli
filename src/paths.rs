@@ -81,6 +81,15 @@ pub fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
+/// Expand a leading `~` / `~/` to the home directory.
+pub fn expand_tilde(p: &str) -> PathBuf {
+    match p.strip_prefix('~') {
+        Some("") => home_dir(),
+        Some(rest) if rest.starts_with(['/', '\\']) => home_dir().join(&rest[1..]),
+        _ => PathBuf::from(p),
+    }
+}
+
 /// Canonicalize (resolving symlinks like /tmp → /private/tmp), falling back
 /// to a lexical absolute path when the target doesn't exist.
 pub fn canonical(p: &Path) -> PathBuf {

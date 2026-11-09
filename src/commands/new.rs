@@ -8,7 +8,6 @@ use crate::commands::{
 };
 use crate::error::{Result, bail};
 use crate::git::{default_remote, fetch_remote};
-use crate::paths;
 use crate::post_create::run_post_create_commands;
 use crate::project::{ensure_grove_ignored, load_project};
 use crate::sandbox::resolve_worktree_git_dir;
@@ -16,8 +15,8 @@ use crate::status_line::{single_status_line_text, workspace_status_line_text};
 use crate::term::{self, stdout};
 use crate::types::{ClaudeConfig, Project, SandboxConfig, SingleProject, WorkspaceProject, WorkspaceRepo};
 use crate::worktree::{
-    ParsedSlug, add_workspace_worktree, add_worktree, parse_slug, repo_abs_path, rollback_workspace_worktree,
-    rollback_worktree, workspace_worktree_dir,
+    ParsedSlug, add_workspace_worktree, add_worktree, parse_slug, repo_abs_path, repo_worktree_path,
+    rollback_workspace_worktree, rollback_worktree, worktree_path_for,
 };
 
 const USAGE: &str = "\
@@ -99,7 +98,7 @@ fn run_single(project: &SingleProject, input: NewInput) -> Result<i32> {
     let base_branch = from_override.clone().or_else(|| project.config.base_branch.clone());
 
     if input.dry_run {
-        print_dry_run_single(project, &slug.full, base_branch.as_deref(), sandbox, passthrough);
+        print_dry_run_single(project, slug, base_branch.as_deref(), sandbox, passthrough);
         return Ok(0);
     }
 
@@ -113,7 +112,7 @@ fn run_single(project: &SingleProject, input: NewInput) -> Result<i32> {
     }
 
     term::info(format_args!("creating worktree {}", slug.full));
-    let added = add_worktree(repo_root, slug, base_branch.as_deref())?;
+    let added = add_worktree(repo_root, &project.layout, slug, base_branch.as_deref())?;
     let worktree_path = added.worktree_path;
     report_add_mode(&slug.full, added.mode, base_branch.as_deref(), from_override.as_deref());
 
@@ -130,7 +129,7 @@ fn run_single(project: &SingleProject, input: NewInput) -> Result<i32> {
     };
     if let Err(err) = setup() {
         handle_setup_failure(*keep_on_failure, &worktree_path, || {
-            rollback_worktree(repo_root, slug, added.created_branch)
+            rollback_worktree(repo_root, &project.layout, &worktree_path, slug, added.created_branch)
         });
         return Err(err);
     }
@@ -157,7 +156,7 @@ fn run_workspace(project: &WorkspaceProject, input: NewInput) -> Result<i32> {
     let config = &project.config;
 
     if input.dry_run {
-        print_dry_run_workspace(project, &slug.full, from_override.as_deref(), sandbox, passthrough);
+        print_dry_run_workspace(project, slug, from_override.as_deref(), sandbox, passthrough);
         return Ok(0);
     }
 
@@ -178,7 +177,7 @@ fn run_workspace(project: &WorkspaceProject, input: NewInput) -> Result<i32> {
 
     term::info(format_args!("creating workspace worktree {} across {} repo(s)", slug.full, config.repos.len()));
 
-    let added = add_workspace_worktree(workspace_root, slug, &config.repos, from_override.as_deref())?;
+    let added = add_workspace_worktree(workspace_root, &project.layout, slug, &config.repos, from_override.as_deref())?;
     let worktree_path = added.workspace_dir;
     for r in &added.per_repo {
         let base = from_override.as_deref().or(r.repo.base_branch.as_deref());
@@ -197,7 +196,7 @@ fn run_workspace(project: &WorkspaceProject, input: NewInput) -> Result<i32> {
     };
     if let Err(err) = setup() {
         handle_setup_failure(*keep_on_failure, &worktree_path, || {
-            rollback_workspace_worktree(workspace_root, slug, &added.per_repo)
+            rollback_workspace_worktree(workspace_root, &project.layout, &worktree_path, slug, &added.per_repo)
         });
         return Err(err);
     }
@@ -211,7 +210,7 @@ fn run_workspace(project: &WorkspaceProject, input: NewInput) -> Result<i32> {
             root_dir: workspace_root,
             branch: &slug.full,
             workspace: true,
-            git_dirs: collect_workspace_git_dirs(workspace_root, &config.repos, slug),
+            git_dirs: collect_workspace_git_dirs(workspace_root, &config.repos, &worktree_path),
             sandbox,
         },
         false,
@@ -251,12 +250,11 @@ fn setup_shared(root_dir: &Path, worktree_path: &Path, sandbox: &SandboxConfig) 
     Ok(())
 }
 
-fn collect_workspace_git_dirs(workspace_root: &Path, repos: &[WorkspaceRepo], slug: &ParsedSlug) -> Vec<PathBuf> {
+fn collect_workspace_git_dirs(workspace_root: &Path, repos: &[WorkspaceRepo], workspace_dir: &Path) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     for repo in repos {
         dirs.push(repo_abs_path(workspace_root, repo).join(".git"));
-        let sub_path = paths::join(&workspace_worktree_dir(workspace_root, slug), &repo.path);
-        dirs.extend(resolve_worktree_git_dir(&sub_path));
+        dirs.extend(resolve_worktree_git_dir(&repo_worktree_path(workspace_dir, repo)));
     }
     dirs
 }
@@ -276,7 +274,7 @@ fn enabled(sandbox: &SandboxConfig) -> &'static str {
 
 fn print_dry_run_single(
     project: &SingleProject,
-    slug: &str,
+    slug: &ParsedSlug,
     base_branch: Option<&str>,
     sandbox: &SandboxConfig,
     passthrough: &[String],
@@ -286,9 +284,9 @@ fn print_dry_run_single(
         "Mode:         single-repo".to_string(),
         format!("Repo root:    {root}"),
         format!("Config:       {}", project.config_source.as_str()),
-        format!("Branch:       {slug}"),
+        format!("Branch:       {}", slug.full),
         format!("From:         {}", base_branch.unwrap_or("(existing branch if present, else current HEAD)")),
-        format!("Worktree:     {root}/.grove/{slug}"),
+        format!("Worktree:     {}", worktree_path_for(&project.layout.dir, slug).display()),
         format!("Sandbox:      {}", enabled(sandbox)),
         format!("Shared (ro):  {}", list_or_none(&sandbox.share_read_only)),
         format!("Shared (rw):  {}", list_or_none(&sandbox.share_read_write)),
@@ -300,7 +298,7 @@ fn print_dry_run_single(
 
 fn print_dry_run_workspace(
     project: &WorkspaceProject,
-    slug: &str,
+    slug: &ParsedSlug,
     from_override: Option<&str>,
     sandbox: &SandboxConfig,
     passthrough: &[String],
@@ -310,8 +308,8 @@ fn print_dry_run_workspace(
     let mut lines = vec![
         "Mode:         workspace".to_string(),
         format!("Workspace:    {root}"),
-        format!("Branch:       {slug}"),
-        format!("Worktree:     {root}/.grove/{slug}"),
+        format!("Branch:       {}", slug.full),
+        format!("Worktree:     {}", worktree_path_for(&project.layout.dir, slug).display()),
         "Repos:".to_string(),
     ];
     for repo in &config.repos {

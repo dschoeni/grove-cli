@@ -34,6 +34,7 @@ Commands:
   ls                   List Grove-managed worktrees.
   rm <slug>            Remove a worktree and its branch.
   repair [slug]        Re-sync worktrees with .groverc (e.g. add newly listed repos).
+  migrate <slug|all>   Move worktrees from <repo>/.grove to the worktreeRoot location.
   pull [branch]        Fast-forward the base branch to its latest remote state.
   completion <shell>   Output a bash or zsh completion script.
 
@@ -62,6 +63,7 @@ fn run(argv: &[String]) -> Result<i32> {
         "ls" => commands::ls::run(rest),
         "rm" => commands::rm::run(rest),
         "repair" => commands::repair::run(rest),
+        "migrate" => commands::migrate::run(rest),
         "pull" => commands::pull::run(rest),
         "completion" => Ok(commands::completion::run(rest)),
         "__complete-slugs" => {

@@ -2,6 +2,7 @@ pub mod complete_slugs;
 pub mod completion;
 pub mod init;
 pub mod ls;
+pub mod migrate;
 pub mod new;
 pub mod pull;
 pub mod repair;

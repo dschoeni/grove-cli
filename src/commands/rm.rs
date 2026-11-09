@@ -34,16 +34,23 @@ pub fn run(argv: &[String]) -> Result<i32> {
     match load_project()? {
         Project::Workspace(ws) => {
             require_cwd_at_workspace_root(&ws.workspace_root)?;
-            if find_workspace_worktree(&ws.workspace_root, &ws.config.repos, &slug).is_none() {
+            let Some(row) = find_workspace_worktree(&ws.workspace_root, &ws.layout, &ws.config.repos, &slug) else {
                 bail!("No Grove worktree found for slug \"{}\"", slug.full);
-            }
-            remove_workspace_worktree(&ws.workspace_root, &slug, &ws.config.repos, force)?;
+            };
+            remove_workspace_worktree(
+                &ws.workspace_root,
+                &ws.layout,
+                &row.workspace_dir,
+                &slug,
+                &ws.config.repos,
+                force,
+            )?;
         }
         Project::Single(single) => {
-            if find_grove_worktree(&single.repo_root, &slug)?.is_none() {
+            let Some(wt) = find_grove_worktree(&single.repo_root, &single.layout, &slug)? else {
                 bail!("No Grove worktree found for slug \"{}\"", slug.full);
-            }
-            remove_worktree(&single.repo_root, &slug, force, true)?;
+            };
+            remove_worktree(&single.repo_root, &single.layout, &wt.path, &slug, force, true)?;
         }
     }
     stdout!("Removed worktree {}\n", slug.full);
