@@ -81,17 +81,6 @@ pub fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
-/// Per-user data directory: `$XDG_DATA_HOME` or `~/.local/share` on Unix
-/// (macOS too: no spaces in the path, which some build tools trip over),
-/// `%LOCALAPPDATA%` on Windows.
-pub fn data_dir() -> PathBuf {
-    let env_dir = |k: &str| std::env::var_os(k).map(PathBuf::from).filter(|p| p.is_absolute());
-    if cfg!(windows) {
-        return env_dir("LOCALAPPDATA").unwrap_or_else(|| home_dir().join("AppData").join("Local"));
-    }
-    env_dir("XDG_DATA_HOME").unwrap_or_else(|| home_dir().join(".local").join("share"))
-}
-
 /// Expand a leading `~` / `~/` to the home directory.
 pub fn expand_tilde(p: &str) -> PathBuf {
     match p.strip_prefix('~') {

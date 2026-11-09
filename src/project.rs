@@ -116,19 +116,20 @@ pub const WORKTREE_ROOT_ENV: &str = "GROVE_WORKTREE_ROOT";
 /// `worktreeRoot`; when absent, `$GROVE_WORKTREE_ROOT` applies.
 pub fn resolve_layout(root: &Path, setting: Option<&str>) -> Layout {
     let env = std::env::var(WORKTREE_ROOT_ENV).ok();
-    layout_for(root, setting.or(env.as_deref()), &paths::data_dir())
+    layout_for(root, setting.or(env.as_deref()), &paths::home_dir())
 }
 
 /// - unset / `"repo"` → `<root>/.grove` (the default)
-/// - `"system"`       → `<data_dir>/grove/worktrees/<project-key>`
+/// - `"system"`       → `~/.grove/<project-key>`
 /// - any other path   → `<path>/<project-key>` (`~` expanded, relative to `root`)
 ///
-/// The project key keeps projects that share a base dir apart.
-fn layout_for(root: &Path, setting: Option<&str>, data_dir: &Path) -> Layout {
+/// The project key keeps projects that share a base dir apart; it always ends
+/// in `-<hash>`, so it can't collide with anything else grove puts in `~/.grove`.
+fn layout_for(root: &Path, setting: Option<&str>, home: &Path) -> Layout {
     let local = root.join(".grove");
     let base = match setting.map(str::trim) {
         None | Some("" | "repo") => return Layout { dir: local, legacy: None },
-        Some("system") => data_dir.join("grove").join("worktrees"),
+        Some("system") => home.join(".grove"),
         Some(p) => paths::resolve(root, paths::expand_tilde(p)),
     };
     let dir = base.join(project_key(root));
@@ -278,9 +279,9 @@ mod tests {
 
     #[test]
     fn layout_defaults_to_repo_local() {
-        let l = layout_for(Path::new("/nonexistent/r"), None, Path::new("/data"));
+        let l = layout_for(Path::new("/nonexistent/r"), None, Path::new("/home/u"));
         assert_eq!(l, Layout { dir: PathBuf::from("/nonexistent/r/.grove"), legacy: None });
-        assert_eq!(layout_for(Path::new("/nonexistent/r"), Some("repo"), Path::new("/data")), l);
+        assert_eq!(layout_for(Path::new("/nonexistent/r"), Some("repo"), Path::new("/home/u")), l);
     }
 
     #[test]
@@ -289,14 +290,14 @@ mod tests {
         let key = project_key(root);
         assert!(key.starts_with("my_repo-") && key.len() == "my_repo-".len() + 8, "{key}");
 
-        let sys = layout_for(root, Some("system"), Path::new("/data"));
-        assert_eq!(sys.dir, PathBuf::from(format!("/data/grove/worktrees/{key}")));
+        let sys = layout_for(root, Some("system"), Path::new("/home/u"));
+        assert_eq!(sys.dir, PathBuf::from(format!("/home/u/.grove/{key}")));
         assert_eq!(sys.legacy, Some(root.join(".grove")));
         assert_eq!(sys.dirs().count(), 2);
 
-        let abs = layout_for(root, Some("/wt"), Path::new("/data"));
+        let abs = layout_for(root, Some("/wt"), Path::new("/home/u"));
         assert_eq!(abs.dir, PathBuf::from(format!("/wt/{key}")));
-        let rel = layout_for(root, Some("../wt"), Path::new("/data"));
+        let rel = layout_for(root, Some("../wt"), Path::new("/home/u"));
         assert_eq!(rel.dir, PathBuf::from(format!("/nonexistent/wt/{key}")));
     }
 

@@ -524,12 +524,11 @@ mod tests {
 
     #[test]
     fn moved_layout_still_sees_legacy_worktrees() {
-        let moved =
-            Layout { dir: PathBuf::from("/data/grove/worktrees/r-1"), legacy: Some(PathBuf::from("/r/.grove")) };
-        assert!(is_grove_worktree(&moved, Path::new("/data/grove/worktrees/r-1/feat/x")));
+        let moved = Layout { dir: PathBuf::from("/home/u/.grove/r-1"), legacy: Some(PathBuf::from("/r/.grove")) };
+        assert!(is_grove_worktree(&moved, Path::new("/home/u/.grove/r-1/feat/x")));
         assert!(is_grove_worktree(&moved, Path::new("/r/.grove/fix/y")));
-        assert!(!is_grove_worktree(&moved, Path::new("/data/grove/worktrees/r-2/feat/x")));
-        assert_eq!(slug_of(&moved, Path::new("/data/grove/worktrees/r-1/feat/x")), "feat/x");
+        assert!(!is_grove_worktree(&moved, Path::new("/home/u/.grove/r-2/feat/x")));
+        assert_eq!(slug_of(&moved, Path::new("/home/u/.grove/r-1/feat/x")), "feat/x");
         assert_eq!(slug_of(&moved, Path::new("/r/.grove/fix/a/b")), "fix/a/b");
     }
 }

@@ -102,7 +102,7 @@ By default a project's worktrees go in `<repo>/.grove/`, inside the main checkou
 | Value | Grove dir for the project |
 |-------|---------------------------|
 | unset / `"repo"` | `<repo>/.grove` (default) |
-| `"system"` | `$XDG_DATA_HOME/grove/worktrees/<project>` (falls back to `~/.local/share/...`, macOS included; `%LOCALAPPDATA%\grove\worktrees\<project>` on Windows) |
+| `"system"` | `~/.grove/<project>` (`%USERPROFILE%\.grove\<project>` on Windows) |
 | any other path | `<path>/<project>`: `~` is expanded, and a relative path resolves against the repo/workspace root |
 
 `<project>` is `<root-dir-name>-<hash of its absolute path>` (e.g. `myapp-5459eeec`), so several projects can share the same base dir. To apply this to every project at once, including ones with no `.groverc`, set `GROVE_WORKTREE_ROOT` (same values; a `.groverc` `worktreeRoot` takes precedence). Both modes support it: a workspace worktree ends up at `<grove dir>/<type>/<name>/<repo.path>`.
