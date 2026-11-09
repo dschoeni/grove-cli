@@ -10,10 +10,7 @@ use crate::sandbox::resolve_worktree_git_dir;
 use crate::status_line::{single_status_line_text, workspace_status_line_text};
 use crate::term::{self, stderr, stdout};
 use crate::types::{Project, WorkspaceRepo};
-use crate::worktree::{
-    WorkspaceWorktreeRow, find_grove_worktree, find_workspace_worktree, parse_slug, repo_abs_path,
-    workspace_worktree_dir,
-};
+use crate::worktree::{WorkspaceWorktreeRow, find_grove_worktree, find_workspace_worktree, parse_slug, repo_abs_path};
 
 const USAGE: &str = "\
 grove resume — re-enter an existing worktree and continue the last Claude session
@@ -43,16 +40,16 @@ pub fn run(argv: &[String]) -> Result<i32> {
 
     let (root_dir, worktree_path, git_dirs) = match &project {
         Project::Workspace(ws) => {
-            let Some(row) = find_workspace_worktree(&ws.workspace_root, &ws.config.repos, &slug) else {
+            let Some(row) = find_workspace_worktree(&ws.workspace_root, &ws.layout, &ws.config.repos, &slug) else {
                 bail!("No Grove worktree found for slug \"{}\"", slug.full);
             };
-            let worktree_path = workspace_worktree_dir(&ws.workspace_root, &slug);
+            let worktree_path = row.workspace_dir.clone();
             let git_dirs = collect_workspace_git_dirs(&ws.workspace_root, &ws.config.repos, &row);
             ensure_status_line(&worktree_path, &workspace_status_line_text(&ws.workspace_root, &slug.full))?;
             (ws.workspace_root.clone(), worktree_path, git_dirs)
         }
         Project::Single(single) => {
-            let Some(wt) = find_grove_worktree(&single.repo_root, &slug)? else {
+            let Some(wt) = find_grove_worktree(&single.repo_root, &single.layout, &slug)? else {
                 bail!("No Grove worktree found for slug \"{}\"", slug.full);
             };
             let git_dirs = collect_single_git_dirs(&single.repo_root, &wt.path);

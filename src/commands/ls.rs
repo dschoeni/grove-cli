@@ -2,11 +2,10 @@ use std::path::Path;
 
 use crate::args::{self, HELP};
 use crate::error::Result;
-use crate::paths;
 use crate::project::load_project;
 use crate::term::stdout;
-use crate::types::{Project, WorkspaceRepo};
-use crate::worktree::{list_grove_worktrees, list_workspace_worktrees};
+use crate::types::{Layout, Project, WorkspaceRepo};
+use crate::worktree::{list_grove_worktrees, list_workspace_worktrees, slug_of};
 
 const USAGE: &str = "\
 grove ls — list Grove-managed worktrees in the current repo
@@ -20,25 +19,24 @@ pub fn run(argv: &[String]) -> Result<i32> {
     }
 
     match load_project()? {
-        Project::Workspace(ws) => run_workspace(&ws.workspace_root, &ws.config.repos),
-        Project::Single(single) => run_single(&single.repo_root)?,
+        Project::Workspace(ws) => run_workspace(&ws.workspace_root, &ws.layout, &ws.config.repos),
+        Project::Single(single) => run_single(&single.repo_root, &single.layout)?,
     }
     Ok(0)
 }
 
-fn run_single(repo_root: &Path) -> Result<()> {
-    let worktrees = list_grove_worktrees(repo_root)?;
+fn run_single(repo_root: &Path, layout: &Layout) -> Result<()> {
+    let worktrees = list_grove_worktrees(repo_root, layout)?;
     if worktrees.is_empty() {
         stdout!("No Grove worktrees in this repo.\n");
         return Ok(());
     }
 
-    let grove_dir = repo_root.join(".grove");
     let rows: Vec<Vec<String>> = worktrees
         .iter()
         .map(|w| {
             vec![
-                paths::relative(&grove_dir, &w.path).display().to_string(),
+                slug_of(layout, &w.path),
                 w.branch.clone().unwrap_or_else(|| "(detached)".into()),
                 w.path.display().to_string(),
             ]
@@ -48,8 +46,8 @@ fn run_single(repo_root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn run_workspace(workspace_root: &Path, repos: &[WorkspaceRepo]) {
-    let rows = list_workspace_worktrees(workspace_root, repos);
+fn run_workspace(workspace_root: &Path, layout: &Layout, repos: &[WorkspaceRepo]) {
+    let rows = list_workspace_worktrees(workspace_root, layout, repos);
     if rows.is_empty() {
         stdout!("No Grove worktrees in this workspace.\n");
         return;

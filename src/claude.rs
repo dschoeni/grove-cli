@@ -35,7 +35,7 @@ pub fn build_claude_argv(input: &ClaudeLaunchInput) -> ClaudeArgv {
     if input.resume {
         args.push("--continue".into());
     }
-    // The worktree lives *inside* the main checkout, so Claude picks up parent
+    // By default the worktree lives *inside* the main checkout, so Claude picks up parent
     // CLAUDE.md files and symlink targets that point at the root — without an
     // explicit pin it regularly wanders out of the worktree. Skipped when the
     // user supplies their own --append-system-prompt (the CLI only honors one).

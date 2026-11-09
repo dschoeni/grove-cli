@@ -6,7 +6,7 @@ A small CLI that creates a git worktree, runs your setup, and launches Claude Co
 grove new feat/auth-flow
 ```
 
-…creates `<repo>/.grove/feat/auth-flow/`, branches off your default base, runs anything in `postCreateCommands`, and drops you into a sandboxed Claude session in that worktree.
+…creates `<repo>/.grove/feat/auth-flow/` (or a [system location](#where-worktrees-live-worktreeroot) outside the repo), branches off your default base, runs anything in `postCreateCommands`, and drops you into a sandboxed Claude session in that worktree.
 
 ## Install
 
@@ -82,6 +82,7 @@ Optional JSON file at the repo root. With no file present, defaults are: current
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
+| `worktreeRoot` | `string` | `"repo"` | Where the project's worktrees go: `"repo"`, `"system"` or a path. See [below](#where-worktrees-live-worktreeroot). |
 | `baseBranch` | `string` | current HEAD | Branch new worktrees fork from. Override per-call with `--from`. |
 | `sandbox.enabled` | `boolean` | `true` | When false, `claude` runs directly in the worktree (same as `--no-sandbox`). |
 | `sandbox.shareReadOnly` | `string[]` | `[]` | Repo-relative paths bind-mounted read-only into the sandbox **and** symlinked into the worktree. |
@@ -89,6 +90,24 @@ Optional JSON file at the repo root. With no file present, defaults are: current
 | `postCreateCommands` | `string[]` | `[]` | Shell commands run sequentially in the new worktree. Non-zero exit aborts (or leaves it in place with `--keep-on-failure`). |
 | `claude.command` | `string` | `"claude"` | Binary to launch. |
 | `claude.extraArgs` | `string[]` | `["--permission-mode","auto"]` | Extra flags prepended to Claude's argv. |
+
+### Where worktrees live (`worktreeRoot`)
+
+By default a project's worktrees go in `<repo>/.grove/`, inside the main checkout. That means anything that searches the repo (an agent's grep/glob, your editor, `rg` without `.gitignore` support) also wades through every worktree's full copy of the code. Set `worktreeRoot` to keep that grove dir out of the repo:
+
+```jsonc
+{ "worktreeRoot": "system" }
+```
+
+| Value | Grove dir for the project |
+|-------|---------------------------|
+| unset / `"repo"` | `<repo>/.grove` (default) |
+| `"system"` | `$XDG_DATA_HOME/grove/worktrees/<project>` (falls back to `~/.local/share/...`, macOS included; `%LOCALAPPDATA%\grove\worktrees\<project>` on Windows) |
+| any other path | `<path>/<project>`: `~` is expanded, and a relative path resolves against the repo/workspace root |
+
+`<project>` is `<root-dir-name>-<hash of its absolute path>` (e.g. `myapp-5459eeec`), so several projects can share the same base dir. To apply this to every project at once, including ones with no `.groverc`, set `GROVE_WORKTREE_ROOT` (same values; a `.groverc` `worktreeRoot` takes precedence). Both modes support it: a workspace worktree ends up at `<grove dir>/<type>/<name>/<repo.path>`.
+
+Switching is safe with worktrees already open: grove keeps finding the ones still under `<repo>/.grove/` (in `ls`, `resume`, `sync`, `repair` and `rm`). Only new worktrees go to the new location. Each worktree still contains its own `.grove/shared/` link dir, so `/.grove/` stays in `.git/info/exclude`.
 
 ### Workspace (multi-repo)
 

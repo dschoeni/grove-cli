@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const BRANCH_TYPES: [&str; 3] = ["feat", "fix", "chore"];
 
@@ -74,9 +74,28 @@ impl ConfigSource {
     }
 }
 
+/// Where a project's grove dir — the `<type>/<name>` worktree tree — lives.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Layout {
+    /// New worktrees go to `<dir>/<type>/<name>`: `<root>/.grove` by default,
+    /// or a per-project dir elsewhere when `worktreeRoot` moves it.
+    pub dir: PathBuf,
+    /// The repo-local `<root>/.grove`, still searched when `dir` moved away
+    /// from it, so worktrees created before the switch keep working.
+    pub legacy: Option<PathBuf>,
+}
+
+impl Layout {
+    /// Every grove dir to search, `dir` first.
+    pub fn dirs(&self) -> impl Iterator<Item = &Path> {
+        std::iter::once(self.dir.as_path()).chain(self.legacy.as_deref())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct SingleProject {
     pub repo_root: PathBuf,
+    pub layout: Layout,
     pub config: GroveConfig,
     pub config_source: ConfigSource,
 }
@@ -84,6 +103,7 @@ pub struct SingleProject {
 #[derive(Clone, Debug)]
 pub struct WorkspaceProject {
     pub workspace_root: PathBuf,
+    pub layout: Layout,
     pub config: WorkspaceConfig,
 }
 

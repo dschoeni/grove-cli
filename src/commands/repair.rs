@@ -66,7 +66,7 @@ pub fn run(argv: &[String]) -> Result<i32> {
             for repo in &ws.config.repos {
                 prune_worktrees(&repo_abs_path(&ws.workspace_root, repo));
             }
-            let mut rows = list_workspace_worktrees(&ws.workspace_root, &ws.config.repos);
+            let mut rows = list_workspace_worktrees(&ws.workspace_root, &ws.layout, &ws.config.repos);
             if let Some(slug) = &slug {
                 rows.retain(|r| r.slug == slug.full);
                 if rows.is_empty() {
@@ -82,12 +82,12 @@ pub fn run(argv: &[String]) -> Result<i32> {
             prune_worktrees(&single.repo_root);
             let worktrees = match &slug {
                 Some(slug) => {
-                    let Some(wt) = find_grove_worktree(&single.repo_root, slug)? else {
+                    let Some(wt) = find_grove_worktree(&single.repo_root, &single.layout, slug)? else {
                         bail!("No Grove worktree found for slug \"{}\"", slug.full);
                     };
                     vec![wt]
                 }
-                None => list_grove_worktrees(&single.repo_root)?,
+                None => list_grove_worktrees(&single.repo_root, &single.layout)?,
             };
             repair_single(&single, &worktrees, &opts)
         }
@@ -158,7 +158,7 @@ fn repair_workspace(project: &WorkspaceProject, rows: &[WorkspaceWorktreeRow], o
                 failed = true;
                 continue;
             }
-            match add_repo_worktree(workspace_root, &slug, &r.repo, opts.from_override.as_deref()) {
+            match add_repo_worktree(workspace_root, &row.workspace_dir, &slug, &r.repo, opts.from_override.as_deref()) {
                 Ok(res) => {
                     let base = opts.from_override.as_deref().or(r.repo.base_branch.as_deref());
                     report_add_mode(&label, res.mode, base, opts.from_override.as_deref());

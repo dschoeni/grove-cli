@@ -94,7 +94,7 @@ pub fn run(argv: &[String]) -> Result<i32> {
     match &project {
         Project::Workspace(ws) => {
             require_cwd_at_workspace_root(&ws.workspace_root)?;
-            let Some(row) = find_workspace_worktree(&ws.workspace_root, &ws.config.repos, &slug) else {
+            let Some(row) = find_workspace_worktree(&ws.workspace_root, &ws.layout, &ws.config.repos, &slug) else {
                 bail!("No Grove worktree found for slug \"{}\"", slug.full);
             };
             let mut failed = false;
@@ -107,7 +107,7 @@ pub fn run(argv: &[String]) -> Result<i32> {
             Ok(i32::from(failed))
         }
         Project::Single(single) => {
-            let Some(wt) = find_grove_worktree(&single.repo_root, &slug)? else {
+            let Some(wt) = find_grove_worktree(&single.repo_root, &single.layout, &slug)? else {
                 bail!("No Grove worktree found for slug \"{}\"", slug.full);
             };
             let branch = wt.branch.as_deref().unwrap_or(&slug.full);
