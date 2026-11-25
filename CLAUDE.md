@@ -73,7 +73,7 @@ Pushing a `v*` tag is the whole release: `release.yml` builds Linux x86_64/aarch
 2. Tag that commit with the **full** semver: `git tag vX.Y.Z && git push origin main vX.Y.Z`. The tag must equal `v` + the `Cargo.toml` version exactly (`0.3.0` → `v0.3.0`, not `v0.3`); `verify-version` fails the workflow before building otherwise.
 3. Watch it with `gh run watch` / `gh release view vX.Y.Z`.
 
-`install.sh` (`curl -fsSL https://raw.githubusercontent.com/dschoeni/grove-cli/main/install.sh | sh`) installs or updates from the latest release by following the `/releases/latest` redirect, so it depends on that asset naming and on `SHA256SUMS` — keep them in sync if `release.yml` changes.
+`install.sh` (`curl -fsSL https://raw.githubusercontent.com/dschoeni/grove-cli/main/install.sh | sh`) installs or updates from the latest release (resolved through the GitHub API, falling back to the `/releases/latest` redirect, which can lag behind a fresh release), so it depends on that asset naming and on `SHA256SUMS` — keep them in sync if `release.yml` changes.
 
 ## Commands
 

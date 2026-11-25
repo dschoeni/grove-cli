@@ -36,11 +36,16 @@ target="$arch_part-$os_part"
 
 version="${GROVE_VERSION:-}"
 if [ -z "$version" ]; then
-  # Follow the /releases/latest redirect instead of the API to avoid rate limits.
-  url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest") \
-    || die "could not determine the latest release"
-  version=${url##*/}
-  case "$version" in v*) ;; *) die "could not determine the latest release (got '$url')" ;; esac
+  # The API is authoritative; the /releases/latest redirect can lag behind a fresh release
+  # for a while, so it is only the fallback for when the API is rate-limited.
+  version=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
+    | sed -n 's/^ *"tag_name": *"\([^"]*\)".*/\1/p' | head -1) || version=""
+  if [ -z "$version" ]; then
+    url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest") \
+      || die "could not determine the latest release"
+    version=${url##*/}
+  fi
+  case "$version" in v*) ;; *) die "could not determine the latest release (got '$version')" ;; esac
 fi
 
 name="grove-$version-$target"
