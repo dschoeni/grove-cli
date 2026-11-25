@@ -13,6 +13,7 @@ A single Cargo crate at the repo root; the binary is `grove`.
 ```
 Cargo.toml
 rustfmt.toml                      # max_width = 120
+install.sh                        # curl | sh installer/updater from the latest GitHub release
 src/
 ├── main.rs                       # argv dispatch, error printing, exit codes
 ├── types.rs                      # config, project + slug types
@@ -64,7 +65,15 @@ cargo build --release --target x86_64-unknown-linux-musl
 
 `cargo fmt`, `cargo clippy --all-targets -- -D warnings` and `cargo test` must stay clean (CI enforces all three). Unit tests live next to the code in `#[cfg(test)]` modules and cover the pure logic (paths, arg parsing, slug validation, porcelain parsing, settings merge, Claude argv). Process-level behavior (git, bwrap, exec) has no automated tests; exercise it against throwaway repos with a stub `claude.command` and `GROVE_BWRAP_PATH` pointing at a script that prints its argv.
 
-To release, bump `version` in `Cargo.toml` and push the matching tag (`0.2.0` → `v0.2.0`; a mismatched tag fails the workflow before building). The tag runs `release.yml`, which builds Linux x86_64/aarch64 (musl, static), macOS x86_64/arm64 and Windows x86_64 and publishes them with `SHA256SUMS`.
+### Releasing
+
+Pushing a `v*` tag is the whole release: `release.yml` builds Linux x86_64/aarch64 (musl, static), macOS x86_64/arm64 and Windows x86_64 and creates the GitHub release itself (generated notes, archives named `grove-<tag>-<target>.tar.gz`/`.zip`, plus `SHA256SUMS`). Don't create the release by hand.
+
+1. Bump `version` in `Cargo.toml`, run `cargo build` so `Cargo.lock` follows (the build uses `--locked`), and commit as `Release X.Y.Z` on `main`.
+2. Tag that commit with the **full** semver: `git tag vX.Y.Z && git push origin main vX.Y.Z`. The tag must equal `v` + the `Cargo.toml` version exactly (`0.3.0` → `v0.3.0`, not `v0.3`); `verify-version` fails the workflow before building otherwise.
+3. Watch it with `gh run watch` / `gh release view vX.Y.Z`.
+
+`install.sh` (`curl -fsSL https://raw.githubusercontent.com/dschoeni/grove-cli/main/install.sh | sh`) installs or updates from the latest release by following the `/releases/latest` redirect, so it depends on that asset naming and on `SHA256SUMS` — keep them in sync if `release.yml` changes.
 
 ## Commands
 

@@ -10,7 +10,15 @@ grove new feat/auth-flow
 
 ## Install
 
-Download the archive for your platform from the [releases page](../../releases), unpack it, and put `grove` on your `PATH`. Linux builds are fully static; there is nothing else to install. On Linux, `bwrap` is needed for sandboxing (apt: `bubblewrap`); on macOS nothing extra is needed. Use `--no-sandbox` if you don't want sandboxing. Windows builds run with `--no-sandbox` only.
+On Linux or macOS, install (or update to) the latest release with:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dschoeni/grove-cli/main/install.sh | sh
+```
+
+It verifies the download against `SHA256SUMS` and puts `grove` in `~/.local/bin`; set `GROVE_INSTALL_DIR` to change that or `GROVE_VERSION=v0.3.0` to pin a version. Re-run it to update.
+
+Alternatively, download the archive for your platform from the [releases page](../../releases), unpack it, and put `grove` on your `PATH`. Linux builds are fully static; there is nothing else to install. On Linux, `bwrap` is needed for sandboxing (apt: `bubblewrap`); on macOS nothing extra is needed. Use `--no-sandbox` if you don't want sandboxing. Windows builds run with `--no-sandbox` only.
 
 Or build from source with a Rust toolchain:
 
